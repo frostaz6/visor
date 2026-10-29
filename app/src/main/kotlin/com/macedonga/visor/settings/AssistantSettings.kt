@@ -163,7 +163,7 @@ fun AssistantSettingsScreen(open: (NavKey) -> Unit, model: AssistantViewModel = 
                             config.apiKey.takeIf { it.isNotBlank() }?.let { "••••" + it.takeLast(4) } ?: stringResource(R.string.settings_not_set),
                             onClick = { sheet = "key" }, sub = sub, problem = problem, busy = check == KeyCheck.Checking,
                         )
-                    },
+                    } else null,
                     {
                         ValueRow(
                             stringResource(R.string.ai_model),
