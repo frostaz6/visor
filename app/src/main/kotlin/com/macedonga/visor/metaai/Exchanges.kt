@@ -283,7 +283,7 @@ internal fun Thinking(modifier: Modifier = Modifier) {
 
 /** A Live AI session, folded into one card: how long, a strip of what the camera saw, what was asked. */
 @Composable
-internal fun LiveBlock(conversation: DiaryConversation, onOpen: () -> Unit) {
+internal fun LiveBlock(conversation: DiaryConversation, onOpen: () -> Unit, onExport: () -> Unit) {
     val colors = Visor.colors
     val turns = conversation.turns
     val first = turns.first()
@@ -327,6 +327,21 @@ internal fun LiveBlock(conversation: DiaryConversation, onOpen: () -> Unit) {
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = 12.dp),
         )
+        Row(
+            Modifier.padding(top = 16.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .clickable(onClick = onExport)
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(VisorIcons.Share, null, Modifier.size(16.dp), tint = colors.textSecondary)
+            Text(
+                stringResource(R.string.meta_ai_export_conversation),
+                style = Visor.type.label,
+                color = colors.textSecondary,
+                modifier = Modifier.padding(start = 9.dp),
+            )
+        }
     }
 }
 
