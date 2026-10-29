@@ -332,10 +332,11 @@ class Brain(
             .put(JSONObject().put("type", "input_image").put("image_url",
                 "data:image/jpeg;base64," + Base64.encodeToString(image, Base64.NO_WRAP)))
         input.put(JSONObject().put("role", "user").put("content", content))
-        val tools = JSONArray()
+        val localTools = JSONArray()
         fun add(name: String, description: String, schema: JSONObject) {
-            tools.put(JSONObject().put("type", "function").put("name", name).put("description", description)
-                .put("parameters", JSONObject(schema.toString()).apply { remove("\$schema") }))
+            localTools.put(JSONObject().put("type", "function").put("name", name).put("description", description)
+                .put("parameters", JSONObject(schema.toString()).apply { remove("\$schema") })
+                .put("strict", false))
         }
         if (turn != null) {
             if (book != null) {
@@ -351,12 +352,19 @@ class Brain(
             val request = JSONObject().put("model", model.ifBlank { "gpt-6.1-sol" })
                 .put("instructions", system).put("input", input)
                 .put("store", false).put("stream", true)
-            if (tools.length() > 0) request.put("tools", tools)
+            if (localTools.length() > 0) request.put("tools", JSONArray().put(
+                JSONObject().put("type", "namespace").put("name", "visor")
+                    .put("description", "Trusted local functions from Visor and its enabled MCP servers.")
+                    .put("tools", localTools)
+            ))
             val response = streamChatGpt(token, request)
             val output = response.optJSONArray("output") ?: error("ChatGPT did not return output")
             var called = false
+            val pendingResults = JSONArray()
             for (i in 0 until output.length()) {
                 val item = output.getJSONObject(i)
+                // Preserve assistant, reasoning, and call output items for a stateless continuation.
+                input.put(item)
                 when (item.optString("type")) {
                     "message" -> {
                         val parts = item.optJSONArray("content")
@@ -368,15 +376,15 @@ class Brain(
                     "function_call" -> {
                         if (turn == null) continue
                         called = true
-                        input.put(item)
                         val args = runCatching { JSONObject(item.optString("arguments")) }.getOrDefault(JSONObject())
-                        val result = runTool(item.getString("name"), args, turn)
-                        input.put(JSONObject().put("type", "function_call_output")
+                        val result = runTool(item.getString("name").removePrefix("visor."), args, turn)
+                        pendingResults.put(JSONObject().put("type", "function_call_output")
                             .put("call_id", item.getString("call_id")).put("output", result.text))
                     }
                 }
             }
             if (!called) return said
+            for (i in 0 until pendingResults.length()) input.put(pendingResults.getJSONObject(i))
         }
         return said
     }
