@@ -400,6 +400,7 @@
     <string name="sum_changed">%1$d changed</string>
     <string name="sum_ai_off">Off: the glasses\' own assistant</string>
     <string name="sum_ai_unset">Not set up</string>
+    <string name="sum_ai_chatgpt_plan">ChatGPT plan</string>
     <string name="sum_ai_glasses_voice">glasses\' voice</string>
     <string name="sum_notify_off">Off</string>
     <string name="sum_notify_all">From every app</string>
