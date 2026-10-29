@@ -24,7 +24,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** Where an answer comes from. */
-enum class Provider { CLAUDE, OPENAI_COMPATIBLE }
+enum class Provider { CLAUDE, OPENAI_COMPATIBLE, CHATGPT_PLAN }
 
 /** One question, its answer and what the tools did for it: the conversation behind the next question. */
 data class Exchange(val question: String, val answer: String, val actions: List<ToolAction> = emptyList())
@@ -80,6 +80,7 @@ class Brain(
     private val hub: McpHub? = null,
     private val fields: FieldBook? = null,
     phone: Phone? = null,
+    private val chatGpt: ChatGptTokenSource? = null,
 ) {
     private val phoneTools = phone?.let(::PhoneTools)
 
@@ -97,7 +98,7 @@ class Brain(
         canEnd: Boolean = false,
     ): Reply = withContext(Dispatchers.IO) {
         val c = config()
-        check(c.apiKey.isNotBlank() || c.provider == Provider.OPENAI_COMPATIBLE) { "no API key is set" }
+        check(c.apiKey.isNotBlank() || c.provider != Provider.CLAUDE) { "no API key is set" }
         // The tools never stand in the way of an answer: without them the model still answers.
         val turn = Turn(hub?.let { runCatching { it.toolbox() }.getOrNull() } ?: Toolbox(emptyList(), ""), image, canEnd)
         val system = (if (audience == Audience.PHONE) PHONE_PROMPT else SYSTEM_PROMPT) +
@@ -115,6 +116,7 @@ class Brain(
         val text = when (c.provider) {
             Provider.CLAUDE -> claude(c, c.model.ifBlank { DEFAULT_CLAUDE_MODEL }, system, recent, question, image, tokens, c.webSearch, turn)
             Provider.OPENAI_COMPATIBLE -> openAi(c, c.model, system, recent, question, image, tokens, turn)
+            Provider.CHATGPT_PLAN -> chatGptResponse(c.model, system, recent, question, image, turn)
         }.replace(VISOR_NOTE, "").trim()
         check(text.isNotEmpty()) { "the model gave an empty answer" }
         Reply(text, turn.remembered, turn.actions, turn.ends)
@@ -144,6 +146,7 @@ class Brain(
     private suspend fun write(c: AssistantConfig, model: String, system: String, text: String, tokens: Int): String = when (c.provider) {
         Provider.CLAUDE -> claude(c, model.ifBlank { DEFAULT_CLAUDE_MODEL }, system, emptyList(), text, null, tokens, false, null)
         Provider.OPENAI_COMPATIBLE -> openAi(c, model, system, emptyList(), text, null, tokens, null)
+        Provider.CHATGPT_PLAN -> chatGptResponse(model, system, emptyList(), text, null, null)
     }.trim().also { check(it.isNotEmpty()) { "the model gave an empty answer" } }
 
     /** What the model knows of the wearer, and how to keep it. Empty when there is nowhere to keep it. */
@@ -310,6 +313,113 @@ class Brain(
         }
         return said
     }
+
+
+    /** ChatGPT plan usage requires streamed, non-stored Responses requests, not Chat Completions.
+     * Tool calling is executed locally: hosted MCP is not available for this auth method.
+     */
+    private suspend fun chatGptResponse(
+        model: String, system: String, past: List<Exchange>, question: String, image: ByteArray?, turn: Turn?,
+    ): String {
+        val token = chatGpt?.accessToken() ?: error("Sign in with ChatGPT in Assistant settings")
+        val input = JSONArray()
+        for (e in past) {
+            input.put(JSONObject().put("role", "user").put("content", e.question))
+            input.put(JSONObject().put("role", "assistant").put("content", e.told()))
+        }
+        val content = if (image == null) question else JSONArray()
+            .put(JSONObject().put("type", "input_text").put("text", question))
+            .put(JSONObject().put("type", "input_image").put("image_url",
+                "data:image/jpeg;base64," + Base64.encodeToString(image, Base64.NO_WRAP)))
+        input.put(JSONObject().put("role", "user").put("content", content))
+        val tools = JSONArray()
+        fun add(name: String, description: String, schema: JSONObject) {
+            tools.put(JSONObject().put("type", "function").put("name", name).put("description", description)
+                .put("parameters", JSONObject(schema.toString()).apply { remove("\$schema") }))
+        }
+        if (turn != null) {
+            if (book != null) {
+                add("remember", REMEMBER_HELP, schema("fact", FACT_HELP))
+                add("forget", FORGET_HELP, schema("id", "The fact's id."))
+            }
+            if (turn.canEnd) add(END_TOOL, END_HELP, NO_INPUT)
+            phoneTools?.tools?.forEach { (name, help, schema) -> add(name, help, schema) }
+            turn.box.tools.forEach { add(it.name, it.help(), it.tool.schema) }
+        }
+        var said = ""
+        repeat(MAX_TOOL_ROUNDS) {
+            val request = JSONObject().put("model", model.ifBlank { "gpt-6.1-sol" })
+                .put("instructions", system).put("input", input)
+                .put("store", false).put("stream", true)
+            if (tools.length() > 0) request.put("tools", tools)
+            val response = streamChatGpt(token, request)
+            val output = response.optJSONArray("output") ?: error("ChatGPT did not return output")
+            var called = false
+            for (i in 0 until output.length()) {
+                val item = output.getJSONObject(i)
+                when (item.optString("type")) {
+                    "message" -> {
+                        val parts = item.optJSONArray("content")
+                        for (j in 0 until (parts?.length() ?: 0)) {
+                            val part = parts!!.getJSONObject(j)
+                            if (part.optString("type") == "output_text") said = part.optString("text")
+                        }
+                    }
+                    "function_call" -> {
+                        if (turn == null) continue
+                        called = true
+                        input.put(item)
+                        val args = runCatching { JSONObject(item.optString("arguments")) }.getOrDefault(JSONObject())
+                        val result = runTool(item.getString("name"), args, turn)
+                        input.put(JSONObject().put("type", "function_call_output")
+                            .put("call_id", item.getString("call_id")).put("output", result.text))
+                    }
+                }
+            }
+            if (!called) return said
+        }
+        return said
+    }
+
+    private suspend fun streamChatGpt(token: String, request: JSONObject): JSONObject =
+        suspendCancellableCoroutine { continuation ->
+            val http = URL("https://api.openai.com/v1/responses").openConnection() as HttpURLConnection
+            continuation.invokeOnCancellation { thread { http.disconnect() } }
+            try {
+                http.requestMethod = "POST"
+                http.connectTimeout = 5000
+                http.readTimeout = 55_000
+                http.doOutput = true
+                http.setRequestProperty("Authorization", "Bearer $token")
+                http.setRequestProperty("Content-Type", "application/json")
+                http.setRequestProperty("Accept", "text/event-stream")
+                http.outputStream.use { it.write(request.toString().toByteArray()) }
+                val status = http.responseCode
+                if (status !in 200..299) {
+                    val detail = http.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                    error("ChatGPT answered HTTP $status: " + detail.take(300))
+                }
+                var completed: JSONObject? = null
+                http.inputStream.bufferedReader().useLines { lines ->
+                    for (line in lines) {
+                        if (!line.startsWith("data: ")) continue
+                        val data = line.removePrefix("data: ")
+                        if (data == "[DONE]") break
+                        val event = runCatching { JSONObject(data) }.getOrNull() ?: continue
+                        when (event.optString("type")) {
+                            "response.completed" -> completed = event.getJSONObject("response")
+                            "response.failed", "response.incomplete", "error" ->
+                                error("ChatGPT request did not complete: " + event.toString().take(350))
+                        }
+                    }
+                }
+                continuation.resume(completed ?: error("ChatGPT response stream ended before completion"))
+            } catch (error: Exception) {
+                if (continuation.isActive) continuation.resumeWithException(error)
+            } finally {
+                http.disconnect()
+            }
+        }
 
     /**
      * A reasoning model otherwise spends the whole answer thinking (LM Studio, llama.cpp), or refuses tools on this API
