@@ -110,7 +110,11 @@ class Brain(
             turn.box.prompt +
             (if (image != null && turn.box.tools.isNotEmpty()) PHOTO_PROMPT else "") +
             (if (note.isNotBlank()) " $note" else "") +
-            if (c.instructions.isNotBlank()) " " + c.instructions else ""
+            (if (c.provider == Provider.CHATGPT_PLAN)
+                " Visor requested the ChatGPT model identifier: ${c.model.ifBlank { DEFAULT_CHATGPT_MODEL }}. " +
+                    "If asked which model is in use, report that configured identifier, not a guessed internal model."
+            else "") +
+            (if (c.instructions.isNotBlank()) " " + c.instructions else "")
         val recent = past.takeLast(MAX_EXCHANGES)
         val tokens = if (audience == Audience.PHONE) PHONE_TOKENS else GLASSES_TOKENS
         val text = when (c.provider) {
@@ -349,7 +353,7 @@ class Brain(
         }
         var said = ""
         repeat(MAX_TOOL_ROUNDS) {
-            val request = JSONObject().put("model", model.ifBlank { "gpt-6.1-sol" })
+            val request = JSONObject().put("model", model.ifBlank { DEFAULT_CHATGPT_MODEL })
                 .put("instructions", system).put("input", input)
                 .put("store", false).put("stream", true)
             if (localTools.length() > 0) request.put("tools", ChatGptWire.namespace(localTools))
@@ -499,6 +503,7 @@ class Brain(
         const val THINKING_TOKENS = 4_000
         const val PHONE_TOKENS = 900
         const val DEFAULT_CLAUDE_MODEL = "claude-sonnet-5-5"
+        const val DEFAULT_CHATGPT_MODEL = "gpt-6.1-sol"
         const val SYSTEM_PROMPT =
             "You are the voice assistant in a pair of Meta smart glasses, run by the wearer's own app, Visor. " +
                 "Everything you write is spoken aloud through the glasses' speakers, so answer in one to three short, " +
