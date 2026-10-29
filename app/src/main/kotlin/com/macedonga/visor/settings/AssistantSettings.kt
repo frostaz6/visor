@@ -93,7 +93,23 @@ fun AssistantSettingsScreen(open: (NavKey) -> Unit, model: AssistantViewModel = 
     var check by remember { mutableStateOf<KeyCheck>(KeyCheck.None) }
     LaunchedEffect(config.provider, config.apiKey, config.baseUrl, account.signedIn) {
         if (config.provider == Provider.CHATGPT_PLAN) {
-            check = if (account.signedIn) KeyCheck.Works(runCatching { model.chatGpt.listModels() }.getOrDefault(emptyList())) else KeyCheck.None
+            if (!account.signedIn || !account.sharing) {
+                check = KeyCheck.None
+                return@LaunchedEffect
+            }
+            check = KeyCheck.Checking
+            val catalog = runCatching { model.chatGpt.listModels() }
+            check = catalog.fold(
+                onSuccess = { KeyCheck.Works(it) },
+                onFailure = { KeyCheck.Failed(it.message ?: "Could not load ChatGPT models") },
+            )
+            // The ChatGPT-plan route accepts only models available to this account.
+            // An old model selection from a different account must not be silently reused.
+            catalog.getOrNull()?.let { offered ->
+                if (offered.isNotEmpty() && offered.none { it.id == config.model }) {
+                    model.store.update { it.copy(model = offered.first().id, linesModel = "") }
+                }
+            }
             return@LaunchedEffect
         }
         if (config.provider == Provider.CLAUDE && config.apiKey.isBlank()) {
@@ -167,7 +183,7 @@ fun AssistantSettingsScreen(open: (NavKey) -> Unit, model: AssistantViewModel = 
                     {
                         ValueRow(
                             stringResource(R.string.ai_model),
-                            modelWords(config.model.ifBlank { if (claude) DEFAULT_CLAUDE else if (config.provider == Provider.CHATGPT_PLAN) "gpt-6.1-sol" else "" }).ifEmpty { stringResource(R.string.settings_not_set) },
+                            modelWords(config.model.ifBlank { if (claude) DEFAULT_CLAUDE else "" }).ifEmpty { stringResource(R.string.settings_not_set) },
                             onClick = { sheet = "model" },
                         )
                     },
@@ -180,7 +196,7 @@ fun AssistantSettingsScreen(open: (NavKey) -> Unit, model: AssistantViewModel = 
                     },
                     {
                         // Tests the key and the model: the answer, or why there is none, comes under the row.
-                        val ready = config.enabled && check !is KeyCheck.Refused && (config.provider != Provider.CHATGPT_PLAN || account.signedIn)
+                        val ready = config.enabled && check !is KeyCheck.Refused && (config.provider != Provider.CHATGPT_PLAN || (account.sharing && check is KeyCheck.Works && (check as KeyCheck.Works).models.isNotEmpty()))
                         RowFrame(
                             stringResource(R.string.ai_try),
                             onClick = if (ready && !trying) ({
