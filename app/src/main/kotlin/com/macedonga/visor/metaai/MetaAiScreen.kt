@@ -109,6 +109,7 @@ fun MetaAiScreen(onSettings: () -> Unit, onMemories: () -> Unit, onSession: (Str
     val days by model.days.collectAsStateWithLifecycle()
     val turns by model.turns.collectAsStateWithLifecycle()
     val config by model.store.config.collectAsStateWithLifecycle()
+    val chatGpt by model.chatGpt.state.collectAsStateWithLifecycle()
     val glasses by model.connection.state.collectAsStateWithLifecycle()
     val phase by model.assistant.phase.collectAsStateWithLifecycle()
     val livePhase by model.assistant.liveAiPhase.collectAsStateWithLifecycle()
@@ -119,7 +120,13 @@ fun MetaAiScreen(onSettings: () -> Unit, onMemories: () -> Unit, onSession: (Str
     val attention = rememberUpdatedState(glasses.device?.assistantAttention)
     val speech = rememberSpeech(turns, { attention.value }, light)
     var phoneListening by remember { mutableStateOf(false) }
-    val configured = config.apiKey.isNotBlank() || config.provider == Provider.OPENAI_COMPATIBLE
+    // ChatGPT-plan authentication is account-based, not an API key.
+    // Use the same authorization rule as the main Settings summary.
+    val configured = when (config.provider) {
+        Provider.CLAUDE -> config.apiKey.isNotBlank()
+        Provider.OPENAI_COMPATIBLE -> true
+        Provider.CHATGPT_PLAN -> chatGpt.signedIn && chatGpt.sharing
+    }
     val now = rememberNow()
     val newest = turns.lastOrNull()
     val waiting = turns.takeLast(4).any { it.answer.isEmpty() && it.problem.isEmpty() && System.currentTimeMillis() - it.at < WAITING_MS }
