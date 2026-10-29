@@ -352,11 +352,7 @@ class Brain(
             val request = JSONObject().put("model", model.ifBlank { "gpt-6.1-sol" })
                 .put("instructions", system).put("input", input)
                 .put("store", false).put("stream", true)
-            if (localTools.length() > 0) request.put("tools", JSONArray().put(
-                JSONObject().put("type", "namespace").put("name", "visor")
-                    .put("description", "Trusted local functions from Visor and its enabled MCP servers.")
-                    .put("tools", localTools)
-            ))
+            if (localTools.length() > 0) request.put("tools", ChatGptWire.namespace(localTools))
             val response = streamChatGpt(token, request)
             val output = response.optJSONArray("output") ?: error("ChatGPT did not return output")
             var called = false
@@ -407,21 +403,8 @@ class Brain(
                     val detail = http.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
                     error("ChatGPT answered HTTP $status: " + detail.take(300))
                 }
-                var completed: JSONObject? = null
-                http.inputStream.bufferedReader().useLines { lines ->
-                    for (line in lines) {
-                        if (!line.startsWith("data: ")) continue
-                        val data = line.removePrefix("data: ")
-                        if (data == "[DONE]") break
-                        val event = runCatching { JSONObject(data) }.getOrNull() ?: continue
-                        when (event.optString("type")) {
-                            "response.completed" -> completed = event.getJSONObject("response")
-                            "response.failed", "response.incomplete", "error" ->
-                                error("ChatGPT request did not complete: " + event.toString().take(350))
-                        }
-                    }
-                }
-                continuation.resume(completed ?: error("ChatGPT response stream ended before completion"))
+                val completed = http.inputStream.bufferedReader().useLines(ChatGptWire::completed)
+                continuation.resume(completed)
             } catch (error: Exception) {
                 if (continuation.isActive) continuation.resumeWithException(error)
             } finally {
