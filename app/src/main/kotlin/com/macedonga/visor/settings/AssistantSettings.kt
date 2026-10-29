@@ -134,7 +134,7 @@ fun AssistantSettingsScreen(open: (NavKey) -> Unit, model: AssistantViewModel = 
                             stringResource(R.string.ai_provider),
                             listOf(Provider.CLAUDE to "Claude", Provider.OPENAI_COMPATIBLE to stringResource(R.string.ai_openai_compatible), Provider.CHATGPT_PLAN to "ChatGPT plan"),
                             config.provider,
-                            onPick = { p -> model.store.update { it.copy(provider = p) } },
+                            onPick = { p -> model.store.update { it.copy(provider = p, model = "", linesModel = "") } },
                         )
                     },
                     if (config.provider == Provider.OPENAI_COMPATIBLE) row {
