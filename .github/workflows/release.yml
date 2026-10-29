@@ -1,13 +1,12 @@
-# Builds the signed release APK for a version tag (v1.2.3) and publishes it as a GitHub release.
-# Run it by hand to get a draft release of the current main instead.
+# Candidate builds are manual-only on this fork until Meta pairing and ChatGPT sign-in are verified.
+# A draft release is created from the selected branch. Creating the release tag must
+# NOT trigger a second CI run that could publish an untested APK.
 #
 # Secrets: VISOR_KEYSTORE_BASE64 (the PKCS12 keystore, base64), VISOR_KEYSTORE_PASSWORD, VISOR_KEY_ALIAS,
 # and Meta's app tokens VISOR_META_HW_TOKEN, VISOR_META_AR_TOKEN and VISOR_META_FRL_TOKEN (README, Build from source).
 name: Release
 
 on:
-  push:
-    tags: ["v*.*.*"]
   workflow_dispatch:
     inputs:
       version:
