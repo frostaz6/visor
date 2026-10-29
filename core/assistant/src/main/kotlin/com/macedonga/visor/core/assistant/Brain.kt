@@ -125,7 +125,7 @@ class Brain(
     /** One sentence for the wearer, in [locale]'s language, written from [what]; outside the conversation. */
     suspend fun phrase(what: String, locale: Locale): String = withContext(Dispatchers.IO) {
         val c = config()
-        check(c.apiKey.isNotBlank() || c.provider == Provider.OPENAI_COMPATIBLE) { "no API key is set" }
+        check(c.apiKey.isNotBlank() || c.provider != Provider.CLAUDE) { "no API key is set" }
         val system = "You write one short sentence that smart glasses speak to their wearer, in " +
             "${locale.getDisplayLanguage(Locale.ENGLISH)}. Answer with that sentence only."
         write(c, c.model, system, what, 200)
@@ -134,7 +134,7 @@ class Brain(
     /** A day's lines for the diary, in [locale]'s language, from [exchanges] in order; with the lines' own model if one is set. */
     suspend fun dayLines(exchanges: String, locale: Locale): String = withContext(Dispatchers.IO) {
         val c = config()
-        check(c.apiKey.isNotBlank() || c.provider == Provider.OPENAI_COMPATIBLE) { "no API key is set" }
+        check(c.apiKey.isNotBlank() || c.provider != Provider.CLAUDE) { "no API key is set" }
         val system = "You keep the diary of a person who wears smart glasses with a voice assistant. From the day's " +
             "exchanges with the assistant, write the day's entry: one to three short sentences in " +
             "${locale.getDisplayLanguage(Locale.ENGLISH)}, in the second person (\"You asked about...\"), dry and precise, " +
