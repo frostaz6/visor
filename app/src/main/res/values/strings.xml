@@ -294,6 +294,11 @@
     <string name="meta_ai_set_up">Set up the model</string>
     <string name="meta_ai_copy">Copy</string>
     <string name="meta_ai_share">Share</string>
+    <string name="meta_ai_export_conversation">Export conversation</string>
+    <string name="meta_ai_export_title">Continue in ChatGPT</string>
+    <string name="meta_ai_export_note">Copy the full conversation, then paste it into a new ChatGPT chat, or share it using another app. Photos are not included. The conversation will only appear in your ChatGPT history if you send it there.</string>
+    <string name="meta_ai_export_copy">Copy conversation for ChatGPT</string>
+    <string name="meta_ai_export_share">Share conversation…</string>
     <string name="meta_ai_again">Ask again</string>
     <string name="meta_ai_continue">Continue this conversation</string>
     <string name="meta_ai_delete">Delete</string>
