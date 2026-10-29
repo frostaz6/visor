@@ -100,6 +100,7 @@ import com.macedonga.visor.PhoneAccessKey
 import com.macedonga.visor.R
 import com.macedonga.visor.SettingsGroupKey
 import com.macedonga.visor.TopicKey
+import com.macedonga.visor.chatgpt.ChatGptAccount
 import com.macedonga.visor.core.assistant.AssistantConfig
 import com.macedonga.visor.core.assistant.AssistantConfigStore
 import com.macedonga.visor.core.assistant.Provider
@@ -167,6 +168,7 @@ class SettingsViewModel @Inject constructor(
     val notifyChoice: NotifyChoice,
     val apps: NotifyApps,
     val assistant: AssistantConfigStore,
+    val chatGpt: ChatGptAccount,
     val live: LiveSettingsStore,
     val pins: Pins,
     val toggles: VisorToggles,
@@ -545,7 +547,8 @@ private fun summary(topic: Topic, model: SettingsViewModel, state: SettingsState
     val base = when (topic) {
         Topic.META_AI -> {
             val config by model.assistant.config.collectAsStateWithLifecycle()
-            assistantWords(config)
+            val chatGpt by model.chatGpt.state.collectAsStateWithLifecycle()
+            assistantWords(config, chatGpt.signedIn && chatGpt.sharing)
         }
         Topic.LANGUAGE -> {
             val language = languageOfVoice(settings.value("assistant_voice_id"))
@@ -608,15 +611,20 @@ private fun summary(topic: Topic, model: SettingsViewModel, state: SettingsState
 }
 
 @Composable
-internal fun assistantWords(config: AssistantConfig): String {
-    val configured = config.apiKey.isNotBlank() || config.provider == Provider.OPENAI_COMPATIBLE
+internal fun assistantWords(config: AssistantConfig, chatGptAuthorized: Boolean = false): String {
+    val configured = when (config.provider) {
+        Provider.CLAUDE -> config.apiKey.isNotBlank()
+        Provider.OPENAI_COMPATIBLE -> true
+        Provider.CHATGPT_PLAN -> chatGptAuthorized
+    }
     return when {
         !config.enabled -> stringResource(R.string.sum_ai_off)
         !configured -> stringResource(R.string.sum_ai_unset)
         else -> listOfNotNull(
-            modelWords(config.model.ifBlank { if (config.provider == Provider.CLAUDE) DEFAULT_CLAUDE else "" }),
+            stringResource(R.string.sum_ai_chatgpt_plan).takeIf { config.provider == Provider.CHATGPT_PLAN },
+            modelWords(config.model.ifBlank { if (config.provider == Provider.CLAUDE) DEFAULT_CLAUDE else "" }).takeIf { it.isNotEmpty() },
             stringResource(R.string.sum_ai_glasses_voice).takeIf { config.glassesVoice },
-        ).filter { it.isNotEmpty() }.joinToString(" · ")
+        ).joinToString(" · ")
     }
 }
 
