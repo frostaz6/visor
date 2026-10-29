@@ -142,6 +142,7 @@ internal fun ConversationBlock(
     onLongPress: (TurnRecord) -> Unit,
     onPhoto: (String) -> Unit,
     onMemories: () -> Unit,
+    onExport: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(vertical = 18.dp)) {
         conversation.startedOn?.let {
@@ -155,6 +156,22 @@ internal fun ConversationBlock(
         for ((i, turn) in conversation.turns.withIndex()) {
             if (i > 0) Spacer(Modifier.height(24.dp))
             Exchange(turn, speech.shownOf(turn), { onLongPress(turn) }, onPhoto, onMemories)
+        }
+        Row(
+            Modifier.padding(start = SIDE, end = SIDE, top = 18.dp)
+                .clip(RoundedCornerShape(24.dp))
+                .background(Visor.colors.raised)
+                .clickable(onClick = onExport)
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(VisorIcons.Share, null, Modifier.size(16.dp), tint = Visor.colors.textSecondary)
+            Text(
+                stringResource(R.string.meta_ai_export_conversation),
+                style = Visor.type.label,
+                color = Visor.colors.textSecondary,
+                modifier = Modifier.padding(start = 9.dp),
+            )
         }
     }
 }
