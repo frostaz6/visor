@@ -32,6 +32,9 @@ data class AssistantConfig(
     val answerWaitSeconds: Int = 45,
 )
 
+/** Both providers expose hosted web search; generic OpenAI-compatible servers may not. */
+fun Provider.supportsWebSearch(): Boolean = this == Provider.CLAUDE || this == Provider.CHATGPT_PLAN
+
 /** Languages the wearer can speak that the glasses have no pack for, heard and spoken by the phone (issue #38). */
 val SPEECH_LANGUAGES = listOf(
     "ru-RU", "uk-UA", "pl-PL", "cs-CZ", "ro-RO", "hu-HU", "el-GR", "sv-SE", "da-DK", "nb-NO", "fi-FI",
