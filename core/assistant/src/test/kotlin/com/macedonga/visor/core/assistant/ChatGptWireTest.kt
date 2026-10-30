@@ -61,6 +61,27 @@ class ChatGptWireTest {
         assertEquals(0, ChatGptWire.namespace(JSONArray()).length())
     }
 
+    @Test fun combinesTextSegmentsInsteadOfKeepingOnlyTheLastOne() {
+        val content = JSONArray()
+            .put(JSONObject().put("type", "output_text").put("text", "Hello"))
+            .put(JSONObject().put("type", "output_text").put("text", "world"))
+            .put(JSONObject().put("type", "refusal").put("refusal", "ignored"))
+        val output = JSONArray().put(JSONObject().put("type", "reasoning"))
+            .put(JSONObject().put("type", "message").put("role", "assistant").put("content", content))
+        val response = JSONObject().put("status", "completed").put("output", output)
+        assertEquals("Hello\\nworld".replace("\\n", "\n"), ChatGptWire.assistantText(response))
+        assertTrue(ChatGptWire.shape(response).contains("reasoning"))
+        assertTrue(ChatGptWire.shape(response).contains("message(output_text,output_text,refusal)"))
+    }
+
+    @Test fun reasoningOnlyCompletionIsNotMistakenForAnAnswer() {
+        val response = JSONObject().put("status", "completed")
+            .put("output", JSONArray().put(JSONObject().put("type", "reasoning")))
+        assertEquals("", ChatGptWire.assistantText(response))
+        assertTrue(ChatGptWire.shape(response).contains("reasoning"))
+        assertTrue(!ChatGptWire.shape(response).contains("private"))
+    }
+
     private fun expectFailure(expected: String, action: () -> Unit) {
         val error = runCatching(action).exceptionOrNull()
         assertTrue("Expected failure containing $expected, got $error", error is IllegalStateException)
