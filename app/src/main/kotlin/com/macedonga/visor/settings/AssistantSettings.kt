@@ -47,6 +47,7 @@ import com.macedonga.visor.core.assistant.AssistantPhase
 import com.macedonga.visor.core.assistant.ModelInfo
 import com.macedonga.visor.core.assistant.ModelsError
 import com.macedonga.visor.core.assistant.Provider
+import com.macedonga.visor.core.assistant.supportsWebSearch
 import com.macedonga.visor.core.assistant.SPEECH_LANGUAGES
 import com.macedonga.visor.core.assistant.listModels
 import com.macedonga.visor.core.assistant.mcp.McpHub
@@ -234,7 +235,7 @@ fun AssistantSettingsScreen(open: (NavKey) -> Unit, model: AssistantViewModel = 
                         )
                     },
                     { VisorToggleRow(model.toggles.byId("vision")!!, sub = stringResource(R.string.ai_vision_sub)) },
-                    if (config.provider == Provider.CLAUDE || config.provider == Provider.CHATGPT_PLAN) row {
+                    if (config.provider.supportsWebSearch()) row {
                         VisorToggleRow(model.toggles.byId("web")!!, sub = stringResource(R.string.ai_web_sub))
                     } else null,
                     { VisorToggleRow(model.toggles.byId("quiet_actions")!!, sub = stringResource(R.string.ai_quiet_actions_sub)) },
