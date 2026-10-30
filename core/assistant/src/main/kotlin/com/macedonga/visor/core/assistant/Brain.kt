@@ -37,9 +37,14 @@ private fun Exchange.told(): String = if (actions.isEmpty()) answer else
  * An answer, what the model chose to remember while giving it, and what it did with the person's tools. [ends]: the
  * model ended the conversation, so the glasses should stop listening after the answer.
  */
+data class WebSource(val title: String, val url: String)
+
 data class Reply(
     val text: String, val remembered: List<String> = emptyList(), val actions: List<ToolAction> = emptyList(), val ends: Boolean = false,
+    val sources: List<WebSource> = emptyList(),
 )
+
+private data class ChatGptCompletion(val text: String, val sources: List<WebSource> = emptyList())
 
 /**
  * What one answer may use and what it did with it; [photo] is the glasses' JPEG that came with the question, [canEnd]
@@ -117,13 +122,14 @@ class Brain(
             (if (c.instructions.isNotBlank()) " " + c.instructions else "")
         val recent = past.takeLast(MAX_EXCHANGES)
         val tokens = if (audience == Audience.PHONE) PHONE_TOKENS else GLASSES_TOKENS
-        val text = when (c.provider) {
-            Provider.CLAUDE -> claude(c, c.model.ifBlank { DEFAULT_CLAUDE_MODEL }, system, recent, question, image, tokens, c.webSearch, turn)
-            Provider.OPENAI_COMPATIBLE -> openAi(c, c.model, system, recent, question, image, tokens, turn)
-            Provider.CHATGPT_PLAN -> chatGptResponse(c.model, system, recent, question, image, turn)
-        }.replace(VISOR_NOTE, "").trim()
+        val result = when (c.provider) {
+            Provider.CLAUDE -> ChatGptCompletion(claude(c, c.model.ifBlank { DEFAULT_CLAUDE_MODEL }, system, recent, question, image, tokens, c.webSearch, turn))
+            Provider.OPENAI_COMPATIBLE -> ChatGptCompletion(openAi(c, c.model, system, recent, question, image, tokens, turn))
+            Provider.CHATGPT_PLAN -> chatGptResponse(c.model, system, recent, question, image, turn, c.webSearch)
+        }
+        val text = result.text.replace(VISOR_NOTE, "").trim()
         check(text.isNotEmpty()) { "the model gave an empty answer" }
-        Reply(text, turn.remembered, turn.actions, turn.ends)
+        Reply(text, turn.remembered, turn.actions, turn.ends, result.sources)
     }
 
     /** One sentence for the wearer, in [locale]'s language, written from [what]; outside the conversation. */
@@ -150,7 +156,7 @@ class Brain(
     private suspend fun write(c: AssistantConfig, model: String, system: String, text: String, tokens: Int): String = when (c.provider) {
         Provider.CLAUDE -> claude(c, model.ifBlank { DEFAULT_CLAUDE_MODEL }, system, emptyList(), text, null, tokens, false, null)
         Provider.OPENAI_COMPATIBLE -> openAi(c, model, system, emptyList(), text, null, tokens, null)
-        Provider.CHATGPT_PLAN -> chatGptResponse(model, system, emptyList(), text, null, null)
+        Provider.CHATGPT_PLAN -> chatGptResponse(model, system, emptyList(), text, null, null, false).text
     }.trim().also { check(it.isNotEmpty()) { "the model gave an empty answer" } }
 
     /** What the model knows of the wearer, and how to keep it. Empty when there is nowhere to keep it. */
@@ -324,7 +330,8 @@ class Brain(
      */
     private suspend fun chatGptResponse(
         model: String, system: String, past: List<Exchange>, question: String, image: ByteArray?, turn: Turn?,
-    ): String {
+        webSearch: Boolean,
+    ): ChatGptCompletion {
         val token = chatGpt?.accessToken() ?: error("Sign in with ChatGPT in Assistant settings")
         var input = JSONArray()
         for (e in past) {
@@ -352,6 +359,7 @@ class Brain(
             turn.box.tools.forEach { add(it.name, it.help(), it.tool.schema) }
         }
         var said = ""
+        val citations = LinkedHashMap<String, WebSource>()
         var textOnlyRecovery = false
         var hadToolCalls = false
         val originalInput = JSONArray(input.toString())
@@ -362,14 +370,18 @@ class Brain(
                 .put("instructions", system + if (textOnlyRecovery)
                     " Give a direct, plain-text response to the user's last question. Do not invoke tools." else "")
                 .put("input", input).put("store", false).put("stream", true)
-            // A recovery must not execute any tools a second time.
-            if (!textOnlyRecovery && localTools.length() > 0) request.put("tools", ChatGptWire.namespace(localTools))
+            // Recovery must not execute hosted or local tools a second time.
+            if (!textOnlyRecovery) {
+                val tools = ChatGptWire.tools(localTools, webSearch)
+                if (tools.length() > 0) request.put("tools", tools)
+            }
             // This model supports low reasoning effort, which favors short voice responses.
             if (textOnlyRecovery && selectedModel == DEFAULT_CHATGPT_MODEL) {
                 request.put("reasoning", JSONObject().put("effort", "low"))
             }
             val response = streamChatGpt(token, request)
             lastShape = ChatGptWire.shape(response)
+            for (source in ChatGptWire.webSources(response)) citations.putIfAbsent(source.url, source)
             val spoken = ChatGptWire.assistantText(response)
             if (spoken.isNotBlank()) said = spoken
             val output = response.optJSONArray("output") ?: error("ChatGPT did not return output")
@@ -391,7 +403,7 @@ class Brain(
                 }
             }
             if (!called) {
-                if (said.isNotBlank()) return said
+                if (said.isNotBlank()) return ChatGptCompletion(said, citations.values.toList())
                 if (!textOnlyRecovery) {
                     // Some completed Responses contain reasoning but no speech-ready message.
                     // One tool-free retry avoids a vague "empty answer" without re-running actions.
