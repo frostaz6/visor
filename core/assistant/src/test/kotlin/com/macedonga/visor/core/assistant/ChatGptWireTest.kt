@@ -61,6 +61,12 @@ class ChatGptWireTest {
         assertEquals(0, ChatGptWire.namespace(JSONArray()).length())
     }
 
+    @Test fun webSearchToggleSupportsChatGptAndClaude() {
+        assertTrue(Provider.CHATGPT_PLAN.supportsWebSearch())
+        assertTrue(Provider.CLAUDE.supportsWebSearch())
+        assertTrue(!Provider.OPENAI_COMPATIBLE.supportsWebSearch())
+    }
+
     @Test fun webSearchToolUsesResponsesHostedFormatAndCoexistsWithMcp() {
         val local = JSONArray().put(JSONObject().put("type", "function").put("name", "check_garage")
             .put("description", "Check status").put("parameters", JSONObject().put("type", "object")))
