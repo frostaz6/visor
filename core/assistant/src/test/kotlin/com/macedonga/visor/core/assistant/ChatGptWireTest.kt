@@ -74,6 +74,16 @@ class ChatGptWireTest {
         assertTrue(ChatGptWire.shape(response).contains("message(output_text,output_text,refusal)"))
     }
 
+    @Test fun recoversTextDeltasWhenFinalMessageOmitsText() {
+        val response = ChatGptWire.completed(sequenceOf(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello \"}",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"again\"}",
+            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"reasoning\"}]}}",
+            "data: [DONE]",
+        ))
+        assertEquals("Hello again", ChatGptWire.assistantText(response))
+    }
+
     @Test fun reasoningOnlyCompletionIsNotMistakenForAnAnswer() {
         val response = JSONObject().put("status", "completed")
             .put("output", JSONArray().put(JSONObject().put("type", "reasoning")))
