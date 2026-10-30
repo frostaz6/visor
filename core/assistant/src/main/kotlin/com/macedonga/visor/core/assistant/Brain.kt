@@ -352,41 +352,58 @@ class Brain(
             turn.box.tools.forEach { add(it.name, it.help(), it.tool.schema) }
         }
         var said = ""
+        var textOnlyRecovery = false
+        var hadToolCalls = false
+        val originalInput = JSONArray(input.toString())
+        var lastShape = "no response"
         repeat(MAX_TOOL_ROUNDS) {
-            val request = JSONObject().put("model", model.ifBlank { DEFAULT_CHATGPT_MODEL })
-                .put("instructions", system).put("input", input)
-                .put("store", false).put("stream", true)
-            if (localTools.length() > 0) request.put("tools", ChatGptWire.namespace(localTools))
+            val selectedModel = model.ifBlank { DEFAULT_CHATGPT_MODEL }
+            val request = JSONObject().put("model", selectedModel)
+                .put("instructions", system + if (textOnlyRecovery)
+                    " Give a direct, plain-text response to the user's last question. Do not invoke tools." else "")
+                .put("input", input).put("store", false).put("stream", true)
+            // A recovery must not execute any tools a second time.
+            if (!textOnlyRecovery && localTools.length() > 0) request.put("tools", ChatGptWire.namespace(localTools))
+            // This model supports low reasoning effort, which favors short voice responses.
+            if (textOnlyRecovery && selectedModel == DEFAULT_CHATGPT_MODEL) {
+                request.put("reasoning", JSONObject().put("effort", "low"))
+            }
             val response = streamChatGpt(token, request)
+            lastShape = ChatGptWire.shape(response)
+            val spoken = ChatGptWire.assistantText(response)
+            if (spoken.isNotBlank()) said = spoken
             val output = response.optJSONArray("output") ?: error("ChatGPT did not return output")
             var called = false
             val pendingResults = JSONArray()
             for (i in 0 until output.length()) {
                 val item = output.getJSONObject(i)
-                // Preserve assistant, reasoning, and call output items for a stateless continuation.
+                // Preserve assistant, reasoning, and tool call output items for stateless continuation.
                 input.put(item)
-                when (item.optString("type")) {
-                    "message" -> {
-                        val parts = item.optJSONArray("content")
-                        for (j in 0 until (parts?.length() ?: 0)) {
-                            val part = parts!!.getJSONObject(j)
-                            if (part.optString("type") == "output_text") said = part.optString("text")
-                        }
-                    }
-                    "function_call" -> {
-                        if (turn == null) continue
-                        called = true
-                        val args = runCatching { JSONObject(item.optString("arguments")) }.getOrDefault(JSONObject())
-                        val result = runTool(item.getString("name").removePrefix("visor."), args, turn)
-                        pendingResults.put(JSONObject().put("type", "function_call_output")
-                            .put("call_id", item.getString("call_id")).put("output", result.text))
-                    }
+                if (item.optString("type") == "function_call") {
+                    check(!textOnlyRecovery) { "ChatGPT returned an unexpected function call during text-only recovery" }
+                    if (turn == null) continue
+                    called = true
+                    hadToolCalls = true
+                    val args = runCatching { JSONObject(item.optString("arguments")) }.getOrDefault(JSONObject())
+                    val result = runTool(item.getString("name").removePrefix("visor."), args, turn)
+                    pendingResults.put(JSONObject().put("type", "function_call_output")
+                        .put("call_id", item.getString("call_id")).put("output", result.text))
                 }
             }
-            if (!called) return said
+            if (!called) {
+                if (said.isNotBlank()) return said
+                if (!textOnlyRecovery) {
+                    // Some completed Responses contain reasoning but no speech-ready message.
+                    // One tool-free retry avoids a vague "empty answer" without re-running actions.
+                    textOnlyRecovery = true
+                    if (!hadToolCalls) input = JSONArray(originalInput.toString())
+                    continue
+                }
+                error("ChatGPT completed without answer text after a text-only retry ($lastShape)")
+            }
             for (i in 0 until pendingResults.length()) input.put(pendingResults.getJSONObject(i))
         }
-        return said
+        error("ChatGPT exhausted tool rounds without a final answer ($lastShape)")
     }
 
     private suspend fun streamChatGpt(token: String, request: JSONObject): JSONObject =
