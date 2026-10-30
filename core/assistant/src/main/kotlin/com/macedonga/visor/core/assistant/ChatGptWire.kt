@@ -18,6 +18,44 @@ internal object ChatGptWire {
         )
     }
 
+    /** Only completed assistant output_text pieces are spoken; never expose reasoning items. */
+    fun assistantText(response: JSONObject): String {
+        val output = response.optJSONArray("output") ?: return ""
+        val pieces = ArrayList<String>()
+        for (i in 0 until output.length()) {
+            val item = output.optJSONObject(i) ?: continue
+            if (item.optString("type") != "message" || item.optString("role", "assistant") != "assistant") continue
+            val content = item.optJSONArray("content") ?: continue
+            for (j in 0 until content.length()) {
+                val part = content.optJSONObject(j) ?: continue
+                if (part.optString("type") == "output_text") {
+                    val value = part.optString("text")
+                    if (value.isNotBlank()) pieces.add(value)
+                }
+            }
+        }
+        return pieces.joinToString("\n").trim()
+    }
+
+    /** Structural diagnostics only: never log questions, response text, tool arguments or credentials. */
+    fun shape(response: JSONObject): String {
+        val output = response.optJSONArray("output") ?: return "no output array"
+        val kinds = (0 until output.length()).map { i ->
+            val item = output.optJSONObject(i)
+            when (item?.optString("type")) {
+                "message" -> {
+                    val content = item.optJSONArray("content")
+                    val types = (0 until (content?.length() ?: 0)).mapNotNull { j ->
+                        content?.optJSONObject(j)?.optString("type")?.takeIf(String::isNotEmpty)
+                    }
+                    "message(" + types.joinToString(",") + ")"
+                }
+                else -> item?.optString("type")?.ifEmpty { "unnamed" } ?: "non-object"
+            }
+        }
+        return "status=" + response.optString("status", "unknown") + ", output=" + kinds.joinToString(",").take(180)
+    }
+
     fun completed(lines: Sequence<String>): JSONObject {
         var completed: JSONObject? = null
         for (line in lines) {
