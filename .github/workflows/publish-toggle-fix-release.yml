@@ -1,0 +1,70 @@
+# Publish the previously verified APK. Do not rebuild or alter an existing release.
+name: Publish Visor ChatGPT v1.4.9-chatgpt.3
+
+on:
+  push:
+    branches: [feature/chatgpt-plan-signin]
+    paths:
+      - ".github/workflows/publish-toggle-fix-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: visor-chatgpt-release-3
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: v1.4.9-chatgpt.3
+      SOURCE_SHA: 5b0116ded5b4a7ae908d20007e7a2bfcf5cd7d9d
+      SOURCE_RUN: "40987192973"
+      SOURCE_ARTIFACT: visor-chatgpt-signed-candidate-5b0116ded5b4a7ae908d20007e7a2bfcf5cd7d9d
+    steps:
+      - name: Check signed build and release
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" --jq '.conclusion')" = "success"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" --jq '.head_sha')" = "$SOURCE_SHA"
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release already exists; leaving it unchanged."
+            echo "exists=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Download and check the signed APK
+        if: env.exists != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" --name "$SOURCE_ARTIFACT" --dir dist
+          cd dist
+          sha256sum -c visor-1.4.9-chatgpt.3.apk.sha256
+          test -s visor-1.4.9-chatgpt.3.apk
+
+      - name: Publish latest release
+        if: env.exists != 'true'
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<'EOF'
+          ### What's new
+          - Fixed the Web Search switch not staying on with ChatGPT.
+          - Web search works with ChatGPT sign-in, using the same toggle as Claude.
+          - Source links appear in conversation history and exported chats.
+          - Web search works alongside existing MCP tools.
+
+          Install over the previous ChatGPT Edition. This is an unofficial Visor fork.
+          EOF
+          gh release create "$RELEASE_TAG" \
+            dist/visor-1.4.9-chatgpt.3.apk \
+            dist/visor-1.4.9-chatgpt.3.apk.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$SOURCE_SHA" \
+            --title "Visor ChatGPT Edition v1.4.9-chatgpt.3" \
+            --notes-file release-notes.md \
+            --latest
