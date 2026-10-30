@@ -18,6 +18,37 @@ internal object ChatGptWire {
         )
     }
 
+    /** The Responses route accepts hosted web_search alongside Visor's namespaced client tools. */
+    fun tools(localTools: JSONArray, webSearch: Boolean): JSONArray = JSONArray().apply {
+        if (webSearch) put(JSONObject().put("type", "web_search").put("search_context_size", "medium"))
+        if (localTools.length() > 0) put(namespace(localTools).getJSONObject(0))
+    }
+
+    /** Citations belong in the phone diary, not in speech sent to the glasses. */
+    fun webSources(response: JSONObject): List<WebSource> {
+        val output = response.optJSONArray("output") ?: return emptyList()
+        val sources = LinkedHashMap<String, WebSource>()
+        for (i in 0 until output.length()) {
+            val item = output.optJSONObject(i) ?: continue
+            if (item.optString("type") != "message") continue
+            val content = item.optJSONArray("content") ?: continue
+            for (j in 0 until content.length()) {
+                val annotations = content.optJSONObject(j)?.optJSONArray("annotations") ?: continue
+                for (k in 0 until annotations.length()) {
+                    val cite = annotations.optJSONObject(k) ?: continue
+                    if (cite.optString("type") != "url_citation") continue
+                    val url = cite.optString("url").trim()
+                    val uri = runCatching { java.net.URI(url) }.getOrNull() ?: continue
+                    if (uri.scheme !in listOf("https", "http") || uri.host.isNullOrBlank()) continue
+                    val title = cite.optString("title").ifBlank { uri.host }
+                    sources.putIfAbsent(url, WebSource(title.take(140), url))
+                    if (sources.size >= 8) return sources.values.toList()
+                }
+            }
+        }
+        return sources.values.toList()
+    }
+
     /** Only completed assistant output_text pieces are spoken; never expose reasoning items. */
     fun assistantText(response: JSONObject): String {
         val output = response.optJSONArray("output") ?: return response.optString("_visor_stream_text")
