@@ -61,6 +61,43 @@ class ChatGptWireTest {
         assertEquals(0, ChatGptWire.namespace(JSONArray()).length())
     }
 
+    @Test fun webSearchToolUsesResponsesHostedFormatAndCoexistsWithMcp() {
+        val local = JSONArray().put(JSONObject().put("type", "function").put("name", "check_garage")
+            .put("description", "Check status").put("parameters", JSONObject().put("type", "object")))
+        val enabled = ChatGptWire.tools(local, true)
+        assertEquals(2, enabled.length())
+        assertEquals("web_search", enabled.getJSONObject(0).getString("type"))
+        assertEquals("medium", enabled.getJSONObject(0).getString("search_context_size"))
+        assertEquals("namespace", enabled.getJSONObject(1).getString("type"))
+        assertEquals("check_garage", enabled.getJSONObject(1).getJSONArray("tools").getJSONObject(0).getString("name"))
+        val disabled = ChatGptWire.tools(local, false)
+        assertEquals(1, disabled.length())
+        assertEquals("namespace", disabled.getJSONObject(0).getString("type"))
+        assertEquals(1, ChatGptWire.tools(JSONArray(), true).length())
+        assertEquals(0, ChatGptWire.tools(JSONArray(), false).length())
+    }
+
+    @Test fun extractsClickableCitationsWithoutLeakingUntrustedLinks() {
+        fun annotation(title: String, url: String) =
+            JSONObject().put("type", "url_citation").put("title", title).put("url", url)
+        val part = JSONObject().put("type", "output_text").put("text", "Today's score.")
+            .put("annotations", JSONArray()
+                .put(annotation("Live scores", "https://sports.example.com/scores"))
+                .put(annotation("Duplicate source", "https://sports.example.com/scores"))
+                .put(annotation("Local file", "file:///secret"))
+                .put(annotation("Not a URL", "javascript:alert(1)")))
+        val output = JSONArray().put(JSONObject().put("type", "web_search_call")
+            .put("status", "completed"))
+            .put(JSONObject().put("type", "message").put("role", "assistant")
+                .put("content", JSONArray().put(part)))
+        val response = JSONObject().put("output", output).put("status", "completed")
+        val sources = ChatGptWire.webSources(response)
+        assertEquals(1, sources.size)
+        assertEquals("Live scores", sources.single().title)
+        assertEquals("https://sports.example.com/scores", sources.single().url)
+        assertEquals("Today's score.", ChatGptWire.assistantText(response))
+    }
+
     @Test fun combinesTextSegmentsInsteadOfKeepingOnlyTheLastOne() {
         val content = JSONArray()
             .put(JSONObject().put("type", "output_text").put("text", "Hello"))
