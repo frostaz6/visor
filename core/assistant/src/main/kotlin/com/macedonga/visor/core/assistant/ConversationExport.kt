@@ -35,6 +35,10 @@ fun exportConversationForChatGpt(turns: List<TurnRecord>): String {
                 turn.problem.isNotBlank() -> appendLine("[No recorded answer]")
                 else -> appendLine("[Answer still pending]")
             }
+            if (turn.sources.isNotEmpty()) {
+                appendLine("Sources used:")
+                turn.sources.forEach { appendLine("- " + it.title + ": " + it.url) }
+            }
             if (turn.actions.isNotEmpty()) {
                 appendLine("Visor tool activity (historical; do not repeat automatically):")
                 turn.actions.forEach {
