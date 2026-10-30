@@ -1,0 +1,143 @@
+package com.macedonga.visor.core.assistant
+
+import org.json.JSONArray
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ChatGptWireTest {
+    @Test fun completedStreamReturnsReply() {
+        val response = ChatGptWire.completed(
+            sequenceOf(
+                "event: response.created",
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}",
+                "",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\"}]}]}}",
+                "data: [DONE]",
+            ),
+        )
+        assertEquals("resp_1", response.getString("id"))
+        assertEquals("hello", response.getJSONArray("output").getJSONObject(0)
+            .getJSONArray("content").getJSONObject(0).getString("text"))
+    }
+
+    @Test fun failureEventIsNotReportedAsSuccess() {
+        expectFailure("response failed") {
+            ChatGptWire.completed(sequenceOf(
+                "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"subscription_sharing_usage_limit_exceeded\"}}}",
+            ))
+        }
+    }
+
+    @Test fun incompleteEventIsNotReportedAsSuccess() {
+        expectFailure("incomplete") {
+            ChatGptWire.completed(sequenceOf(
+                "data: {\"type\":\"response.incomplete\",\"response\":{\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}",
+            ))
+        }
+    }
+
+    @Test fun truncatedStreamIsRejected() {
+        expectFailure("without response.completed") {
+            ChatGptWire.completed(sequenceOf(
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}",
+                "data: [DONE]",
+            ))
+        }
+    }
+
+    @Test fun functionToolsUseSupportedNamespace() {
+        val tool = JSONObject().put("type", "function").put("name", "garage_status")
+            .put("description", "Check garage door")
+            .put("parameters", JSONObject().put("type", "object").put("properties", JSONObject()))
+            .put("strict", false)
+        val requestTools = ChatGptWire.namespace(JSONArray().put(tool))
+        assertEquals(1, requestTools.length())
+        val namespace = requestTools.getJSONObject(0)
+        assertEquals("namespace", namespace.getString("type"))
+        assertEquals("visor", namespace.getString("name"))
+        assertEquals("garage_status", namespace.getJSONArray("tools").getJSONObject(0).getString("name"))
+        assertEquals(0, ChatGptWire.namespace(JSONArray()).length())
+    }
+
+    @Test fun webSearchToggleSupportsChatGptAndClaude() {
+        assertTrue(Provider.CHATGPT_PLAN.supportsWebSearch())
+        assertTrue(Provider.CLAUDE.supportsWebSearch())
+        assertTrue(!Provider.OPENAI_COMPATIBLE.supportsWebSearch())
+    }
+
+    @Test fun webSearchToolUsesResponsesHostedFormatAndCoexistsWithMcp() {
+        val local = JSONArray().put(JSONObject().put("type", "function").put("name", "check_garage")
+            .put("description", "Check status").put("parameters", JSONObject().put("type", "object")))
+        val enabled = ChatGptWire.tools(local, true)
+        assertEquals(2, enabled.length())
+        assertEquals("web_search", enabled.getJSONObject(0).getString("type"))
+        assertEquals("medium", enabled.getJSONObject(0).getString("search_context_size"))
+        assertEquals("namespace", enabled.getJSONObject(1).getString("type"))
+        assertEquals("check_garage", enabled.getJSONObject(1).getJSONArray("tools").getJSONObject(0).getString("name"))
+        val disabled = ChatGptWire.tools(local, false)
+        assertEquals(1, disabled.length())
+        assertEquals("namespace", disabled.getJSONObject(0).getString("type"))
+        assertEquals(1, ChatGptWire.tools(JSONArray(), true).length())
+        assertEquals(0, ChatGptWire.tools(JSONArray(), false).length())
+    }
+
+    @Test fun extractsClickableCitationsWithoutLeakingUntrustedLinks() {
+        fun annotation(title: String, url: String) =
+            JSONObject().put("type", "url_citation").put("title", title).put("url", url)
+        val part = JSONObject().put("type", "output_text").put("text", "Today's score.")
+            .put("annotations", JSONArray()
+                .put(annotation("Live scores", "https://sports.example.com/scores"))
+                .put(annotation("Duplicate source", "https://sports.example.com/scores"))
+                .put(annotation("Local file", "file:///secret"))
+                .put(annotation("Not a URL", "javascript:alert(1)")))
+        val output = JSONArray().put(JSONObject().put("type", "web_search_call")
+            .put("status", "completed"))
+            .put(JSONObject().put("type", "message").put("role", "assistant")
+                .put("content", JSONArray().put(part)))
+        val response = JSONObject().put("output", output).put("status", "completed")
+        val sources = ChatGptWire.webSources(response)
+        assertEquals(1, sources.size)
+        assertEquals("Live scores", sources.single().title)
+        assertEquals("https://sports.example.com/scores", sources.single().url)
+        assertEquals("Today's score.", ChatGptWire.assistantText(response))
+    }
+
+    @Test fun combinesTextSegmentsInsteadOfKeepingOnlyTheLastOne() {
+        val content = JSONArray()
+            .put(JSONObject().put("type", "output_text").put("text", "Hello"))
+            .put(JSONObject().put("type", "output_text").put("text", "world"))
+            .put(JSONObject().put("type", "refusal").put("refusal", "ignored"))
+        val output = JSONArray().put(JSONObject().put("type", "reasoning"))
+            .put(JSONObject().put("type", "message").put("role", "assistant").put("content", content))
+        val response = JSONObject().put("status", "completed").put("output", output)
+        assertEquals("Hello\\nworld".replace("\\n", "\n"), ChatGptWire.assistantText(response))
+        assertTrue(ChatGptWire.shape(response).contains("reasoning"))
+        assertTrue(ChatGptWire.shape(response).contains("message(output_text,output_text,refusal)"))
+    }
+
+    @Test fun recoversTextDeltasWhenFinalMessageOmitsText() {
+        val response = ChatGptWire.completed(sequenceOf(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello \"}",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"again\"}",
+            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"reasoning\"}]}}",
+            "data: [DONE]",
+        ))
+        assertEquals("Hello again", ChatGptWire.assistantText(response))
+    }
+
+    @Test fun reasoningOnlyCompletionIsNotMistakenForAnAnswer() {
+        val response = JSONObject().put("status", "completed")
+            .put("output", JSONArray().put(JSONObject().put("type", "reasoning")))
+        assertEquals("", ChatGptWire.assistantText(response))
+        assertTrue(ChatGptWire.shape(response).contains("reasoning"))
+        assertTrue(!ChatGptWire.shape(response).contains("private"))
+    }
+
+    private fun expectFailure(expected: String, action: () -> Unit) {
+        val error = runCatching(action).exceptionOrNull()
+        assertTrue("Expected failure containing $expected, got $error", error is IllegalStateException)
+        assertTrue(error?.message.orEmpty().contains(expected, ignoreCase = true))
+    }
+}

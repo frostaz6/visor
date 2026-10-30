@@ -3,7 +3,7 @@ package com.macedonga.visor.settings
 import android.content.Context
 import com.macedonga.visor.R
 import com.macedonga.visor.core.assistant.AssistantConfigStore
-import com.macedonga.visor.core.assistant.Provider
+import com.macedonga.visor.core.assistant.supportsWebSearch
 import com.macedonga.visor.core.media.LiveSettingsStore
 import com.macedonga.visor.notify.NotifyChoice
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -95,7 +95,7 @@ class VisorToggles @Inject constructor(
         ),
         VisorToggle(
             "web", R.string.ai_web, R.string.ai_web_sub, Topic.META_AI,
-            assistant.config.on { it.webSearch && it.provider == Provider.CLAUDE }, { on -> assistant.update { it.copy(webSearch = on) } },
+            assistant.config.on { it.webSearch && it.provider.supportsWebSearch() }, { on -> assistant.update { it.copy(webSearch = on) } },
         ),
         VisorToggle(
             "live_auto", R.string.live_auto, R.string.live_settings_auto_sub, Topic.LIVE,

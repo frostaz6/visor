@@ -253,6 +253,7 @@ private fun TurnRecord.toJson(): JSONObject = JSONObject()
     .put("image", image).put("conversation", conversation).put("source", source.name).put("session", session)
     .put("remembered", JSONArray(remembered))
     .put("actions", JSONArray(actions.map { JSONObject().put("server", it.server).put("what", it.what).put("ok", it.ok) }))
+    .put("sources", JSONArray(sources.map { JSONObject().put("title", it.title).put("url", it.url) }))
 
 private fun turnFrom(o: JSONObject): TurnRecord? = runCatching {
     TurnRecord(
@@ -264,6 +265,12 @@ private fun turnFrom(o: JSONObject): TurnRecord? = runCatching {
         remembered = o.optJSONArray("remembered")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty(),
         actions = o.optJSONArray("actions")?.let { a ->
             (0 until a.length()).mapNotNull { a.optJSONObject(it) }.map { ToolAction(it.optString("server"), it.optString("what"), it.optBoolean("ok", true)) }
+        }.orEmpty(),
+        sources = o.optJSONArray("sources")?.let { a ->
+            (0 until a.length()).mapNotNull { a.optJSONObject(it) }.mapNotNull { source ->
+                val url = source.optString("url")
+                if (url.startsWith("https://") || url.startsWith("http://")) WebSource(source.optString("title"), url) else null
+            }
         }.orEmpty(),
     )
 }.getOrNull()

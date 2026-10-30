@@ -71,6 +71,7 @@ import com.macedonga.visor.R
 import com.macedonga.visor.core.assistant.Provider
 import com.macedonga.visor.core.assistant.TurnRecord
 import com.macedonga.visor.core.assistant.date
+import com.macedonga.visor.core.assistant.exportConversationForChatGpt
 import com.macedonga.visor.core.design.Visor
 import com.macedonga.visor.gallery.Pill
 import com.macedonga.visor.gallery.RoundIcon
@@ -94,6 +95,7 @@ import kotlinx.coroutines.launch
 private sealed interface Pressed {
     data class OnTurn(val turn: TurnRecord, val conversation: DiaryConversation) : Pressed
     data class OnDay(val day: DiaryDay) : Pressed
+    data class OnExport(val conversation: DiaryConversation) : Pressed
 }
 
 /**
@@ -109,6 +111,7 @@ fun MetaAiScreen(onSettings: () -> Unit, onMemories: () -> Unit, onSession: (Str
     val days by model.days.collectAsStateWithLifecycle()
     val turns by model.turns.collectAsStateWithLifecycle()
     val config by model.store.config.collectAsStateWithLifecycle()
+    val chatGpt by model.chatGpt.state.collectAsStateWithLifecycle()
     val glasses by model.connection.state.collectAsStateWithLifecycle()
     val phase by model.assistant.phase.collectAsStateWithLifecycle()
     val livePhase by model.assistant.liveAiPhase.collectAsStateWithLifecycle()
@@ -119,7 +122,13 @@ fun MetaAiScreen(onSettings: () -> Unit, onMemories: () -> Unit, onSession: (Str
     val attention = rememberUpdatedState(glasses.device?.assistantAttention)
     val speech = rememberSpeech(turns, { attention.value }, light)
     var phoneListening by remember { mutableStateOf(false) }
-    val configured = config.apiKey.isNotBlank() || config.provider == Provider.OPENAI_COMPATIBLE
+    // ChatGPT-plan authentication is account-based, not an API key.
+    // Use the same authorization rule as the main Settings summary.
+    val configured = when (config.provider) {
+        Provider.CLAUDE -> config.apiKey.isNotBlank()
+        Provider.OPENAI_COMPATIBLE -> true
+        Provider.CHATGPT_PLAN -> chatGpt.signedIn && chatGpt.sharing
+    }
     val now = rememberNow()
     val newest = turns.lastOrNull()
     val waiting = turns.takeLast(4).any { it.answer.isEmpty() && it.problem.isEmpty() && System.currentTimeMillis() - it.at < WAITING_MS }
@@ -140,6 +149,13 @@ fun MetaAiScreen(onSettings: () -> Unit, onMemories: () -> Unit, onSession: (Str
     var calendar by rememberSaveable { mutableStateOf(false) }
     var pressed by remember { mutableStateOf<Pressed?>(null) }
     var viewing by rememberSaveable { mutableStateOf<String?>(null) }
+    // Conversations may continue across midnight; a day card contains only that day's portion.
+    // Export all turns sharing its conversation id, not only the visible day's turns.
+    fun transcript(conversation: DiaryConversation): String {
+        val all = turns.filter { it.conversation.isNotEmpty() && it.conversation == conversation.id }
+            .ifEmpty { conversation.turns }
+        return exportConversationForChatGpt(all)
+    }
 
     val showSetUp = !configured
     val keys = remember(days, showSetUp) {
@@ -238,7 +254,10 @@ fun MetaAiScreen(onSettings: () -> Unit, onMemories: () -> Unit, onSession: (Str
                         Column(Modifier.animateItem()) {
                             if (i > 0) Box(Modifier.padding(horizontal = SIDE).fillMaxWidth().height(1.dp).background(colors.hairline))
                             if (c.live) {
-                                LiveBlock(c) { onSession(c.id) }
+                                LiveBlock(c, onOpen = { onSession(c.id) }, onExport = {
+                                    haptics.tick(0.35f)
+                                    pressed = Pressed.OnExport(c)
+                                })
                             } else {
                                 ConversationBlock(
                                     c, speech,
@@ -248,6 +267,10 @@ fun MetaAiScreen(onSettings: () -> Unit, onMemories: () -> Unit, onSession: (Str
                                     },
                                     onPhoto = { viewing = it },
                                     onMemories = onMemories,
+                                    onExport = {
+                                        haptics.tick(0.35f)
+                                        pressed = Pressed.OnExport(c)
+                                    },
                                 )
                             }
                         }
@@ -325,6 +348,17 @@ fun MetaAiScreen(onSettings: () -> Unit, onMemories: () -> Unit, onSession: (Str
                 clip.setPrimaryClip(ClipData.newPlainText(turn.question, turn.answer))
             },
             onShare = { share(context, it) },
+            onCopyConversation = { conversation ->
+                val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clip.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.meta_ai_export_conversation), transcript(conversation)))
+            },
+            onShareConversation = { conversation ->
+                val intent = Intent(Intent.ACTION_SEND)
+                    .setType("text/plain")
+                    .putExtra(Intent.EXTRA_SUBJECT, context.getString(R.string.meta_ai_export_conversation))
+                    .putExtra(Intent.EXTRA_TEXT, transcript(conversation))
+                context.startActivity(Intent.createChooser(intent, context.getString(R.string.meta_ai_export_share)))
+            },
             onAgain = { model.askAgain(it.interactionId) },
             onContinue = { c ->
                 continuing = c.id
@@ -346,6 +380,8 @@ private fun Actions(
     onDismiss: () -> Unit,
     onCopy: (TurnRecord) -> Unit,
     onShare: (TurnRecord) -> Unit,
+    onCopyConversation: (DiaryConversation) -> Unit,
+    onShareConversation: (DiaryConversation) -> Unit,
     onAgain: (TurnRecord) -> Unit,
     onContinue: (DiaryConversation) -> Unit,
     onDelete: (Set<String>) -> Unit,
@@ -379,6 +415,22 @@ private fun Actions(
                             then { onDelete(pressed.conversation.turns.map { it.interactionId }.toSet()) }
                         }
                     }
+                }
+                is Pressed.OnExport -> {
+                    Text(
+                        stringResource(R.string.meta_ai_export_title),
+                        style = Visor.type.heading,
+                        color = colors.textPrimary,
+                        modifier = Modifier.asHeading().padding(horizontal = SIDE).padding(bottom = 10.dp),
+                    )
+                    Text(
+                        stringResource(R.string.meta_ai_export_note),
+                        style = Visor.type.body,
+                        color = colors.textSecondary,
+                        modifier = Modifier.padding(horizontal = SIDE, vertical = 8.dp),
+                    )
+                    ActionRow(VisorIcons.Copy, stringResource(R.string.meta_ai_export_copy)) { then { onCopyConversation(pressed.conversation) } }
+                    ActionRow(VisorIcons.Share, stringResource(R.string.meta_ai_export_share)) { then { onShareConversation(pressed.conversation) } }
                 }
                 is Pressed.OnDay -> {
                     Text(dayTitle(pressed.day.date), style = Visor.type.heading, color = colors.textPrimary, modifier = Modifier.asHeading().padding(horizontal = SIDE).padding(bottom = 10.dp))

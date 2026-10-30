@@ -40,12 +40,14 @@ import com.macedonga.visor.IntegrationsKey
 import com.macedonga.visor.MemoriesKey
 import com.macedonga.visor.R
 import com.macedonga.visor.features.featureSection
+import com.macedonga.visor.chatgpt.ChatGptAccount
 import com.macedonga.visor.core.assistant.Assistant
 import com.macedonga.visor.core.assistant.AssistantConfigStore
 import com.macedonga.visor.core.assistant.AssistantPhase
 import com.macedonga.visor.core.assistant.ModelInfo
 import com.macedonga.visor.core.assistant.ModelsError
 import com.macedonga.visor.core.assistant.Provider
+import com.macedonga.visor.core.assistant.supportsWebSearch
 import com.macedonga.visor.core.assistant.SPEECH_LANGUAGES
 import com.macedonga.visor.core.assistant.listModels
 import com.macedonga.visor.core.assistant.mcp.McpHub
@@ -64,6 +66,7 @@ class AssistantViewModel @Inject constructor(
     val toggles: VisorToggles,
     val settings: GlassesSettings,
     val hub: McpHub,
+    val chatGpt: ChatGptAccount,
 ) : ViewModel()
 
 /** What came of asking the provider for its models, which is also the test of the key. */
@@ -83,12 +86,33 @@ private sealed interface KeyCheck {
 fun AssistantSettingsScreen(open: (NavKey) -> Unit, model: AssistantViewModel = hiltViewModel()) {
     val context = LocalContext.current
     val config by model.store.config.collectAsStateWithLifecycle()
+    val account by model.chatGpt.state.collectAsStateWithLifecycle()
     val phase by model.assistant.phase.collectAsStateWithLifecycle()
     var hearing by remember { mutableStateOf(context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) }
     val askHearing = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hearing = it }
 
     var check by remember { mutableStateOf<KeyCheck>(KeyCheck.None) }
-    LaunchedEffect(config.provider, config.apiKey, config.baseUrl) {
+    LaunchedEffect(config.provider, config.apiKey, config.baseUrl, account.signedIn) {
+        if (config.provider == Provider.CHATGPT_PLAN) {
+            if (!account.signedIn || !account.sharing) {
+                check = KeyCheck.None
+                return@LaunchedEffect
+            }
+            check = KeyCheck.Checking
+            val catalog = runCatching { model.chatGpt.listModels() }
+            check = catalog.fold(
+                onSuccess = { KeyCheck.Works(it) },
+                onFailure = { KeyCheck.Failed(it.message ?: "Could not load ChatGPT models") },
+            )
+            // The ChatGPT-plan route accepts only models available to this account.
+            // An old model selection from a different account must not be silently reused.
+            catalog.getOrNull()?.let { offered ->
+                if (offered.isNotEmpty() && offered.none { it.id == config.model }) {
+                    model.store.update { it.copy(model = offered.first().id, linesModel = "") }
+                }
+            }
+            return@LaunchedEffect
+        }
         if (config.provider == Provider.CLAUDE && config.apiKey.isBlank()) {
             check = KeyCheck.None
             return@LaunchedEffect
@@ -125,15 +149,25 @@ fun AssistantSettingsScreen(open: (NavKey) -> Unit, model: AssistantViewModel = 
                     {
                         PillsRow(
                             stringResource(R.string.ai_provider),
-                            listOf(Provider.CLAUDE to "Claude", Provider.OPENAI_COMPATIBLE to stringResource(R.string.ai_openai_compatible)),
+                            listOf(Provider.CLAUDE to "Claude", Provider.OPENAI_COMPATIBLE to stringResource(R.string.ai_openai_compatible), Provider.CHATGPT_PLAN to "ChatGPT plan"),
                             config.provider,
-                            onPick = { p -> model.store.update { it.copy(provider = p) } },
+                            onPick = { p -> model.store.update { it.copy(provider = p, model = "", linesModel = "") } },
                         )
                     },
-                    if (!claude) row {
+                    if (config.provider == Provider.OPENAI_COMPATIBLE) row {
                         ValueRow(stringResource(R.string.ai_base_url), config.baseUrl, onClick = { sheet = "url" })
                     } else null,
-                    {
+                    if (config.provider == Provider.CHATGPT_PLAN) row {
+                        RowFrame(
+                            if (account.signedIn) "ChatGPT: " + (account.email ?: "Connected") else "Continue with ChatGPT",
+                            onClick = {
+                                if (account.signedIn) model.chatGpt.signOut()
+                                else scope.launch { trial = runCatching { model.chatGpt.signIn(); "Signed in to ChatGPT" }.getOrElse { it.message ?: "Sign-in failed" } }
+                            },
+                            sub = if (account.signedIn) "Tap to sign out" else "Sign in securely in your browser. No API key required.",
+                        )
+                    } else null,
+                    if (config.provider != Provider.CHATGPT_PLAN) row {
                         val (sub, problem) = when (val c = check) {
                             KeyCheck.None -> (if (claude) stringResource(R.string.ai_key_needed) else stringResource(R.string.ai_key_optional)) to null
                             KeyCheck.Checking -> stringResource(R.string.ai_key_checking) to null
@@ -146,7 +180,7 @@ fun AssistantSettingsScreen(open: (NavKey) -> Unit, model: AssistantViewModel = 
                             config.apiKey.takeIf { it.isNotBlank() }?.let { "••••" + it.takeLast(4) } ?: stringResource(R.string.settings_not_set),
                             onClick = { sheet = "key" }, sub = sub, problem = problem, busy = check == KeyCheck.Checking,
                         )
-                    },
+                    } else null,
                     {
                         ValueRow(
                             stringResource(R.string.ai_model),
@@ -163,7 +197,7 @@ fun AssistantSettingsScreen(open: (NavKey) -> Unit, model: AssistantViewModel = 
                     },
                     {
                         // Tests the key and the model: the answer, or why there is none, comes under the row.
-                        val ready = config.enabled && check !is KeyCheck.Refused
+                        val ready = config.enabled && check !is KeyCheck.Refused && (config.provider != Provider.CHATGPT_PLAN || (account.sharing && check is KeyCheck.Works && (check as KeyCheck.Works).models.isNotEmpty()))
                         RowFrame(
                             stringResource(R.string.ai_try),
                             onClick = if (ready && !trying) ({
@@ -201,7 +235,9 @@ fun AssistantSettingsScreen(open: (NavKey) -> Unit, model: AssistantViewModel = 
                         )
                     },
                     { VisorToggleRow(model.toggles.byId("vision")!!, sub = stringResource(R.string.ai_vision_sub)) },
-                    if (claude) row { VisorToggleRow(model.toggles.byId("web")!!, sub = stringResource(R.string.ai_web_sub)) } else null,
+                    if (config.provider.supportsWebSearch()) row {
+                        VisorToggleRow(model.toggles.byId("web")!!, sub = stringResource(R.string.ai_web_sub))
+                    } else null,
                     { VisorToggleRow(model.toggles.byId("quiet_actions")!!, sub = stringResource(R.string.ai_quiet_actions_sub)) },
                     {
                         PillsRow(

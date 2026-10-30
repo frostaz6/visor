@@ -24,7 +24,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** Where an answer comes from. */
-enum class Provider { CLAUDE, OPENAI_COMPATIBLE }
+enum class Provider { CLAUDE, OPENAI_COMPATIBLE, CHATGPT_PLAN }
 
 /** One question, its answer and what the tools did for it: the conversation behind the next question. */
 data class Exchange(val question: String, val answer: String, val actions: List<ToolAction> = emptyList())
@@ -37,9 +37,14 @@ private fun Exchange.told(): String = if (actions.isEmpty()) answer else
  * An answer, what the model chose to remember while giving it, and what it did with the person's tools. [ends]: the
  * model ended the conversation, so the glasses should stop listening after the answer.
  */
+data class WebSource(val title: String, val url: String)
+
 data class Reply(
     val text: String, val remembered: List<String> = emptyList(), val actions: List<ToolAction> = emptyList(), val ends: Boolean = false,
+    val sources: List<WebSource> = emptyList(),
 )
+
+private data class ChatGptCompletion(val text: String, val sources: List<WebSource> = emptyList())
 
 /**
  * What one answer may use and what it did with it; [photo] is the glasses' JPEG that came with the question, [canEnd]
@@ -80,6 +85,7 @@ class Brain(
     private val hub: McpHub? = null,
     private val fields: FieldBook? = null,
     phone: Phone? = null,
+    private val chatGpt: ChatGptTokenSource? = null,
 ) {
     private val phoneTools = phone?.let(::PhoneTools)
 
@@ -97,7 +103,7 @@ class Brain(
         canEnd: Boolean = false,
     ): Reply = withContext(Dispatchers.IO) {
         val c = config()
-        check(c.apiKey.isNotBlank() || c.provider == Provider.OPENAI_COMPATIBLE) { "no API key is set" }
+        check(c.apiKey.isNotBlank() || c.provider != Provider.CLAUDE) { "no API key is set" }
         // The tools never stand in the way of an answer: without them the model still answers.
         val turn = Turn(hub?.let { runCatching { it.toolbox() }.getOrNull() } ?: Toolbox(emptyList(), ""), image, canEnd)
         val system = (if (audience == Audience.PHONE) PHONE_PROMPT else SYSTEM_PROMPT) +
@@ -109,21 +115,27 @@ class Brain(
             turn.box.prompt +
             (if (image != null && turn.box.tools.isNotEmpty()) PHOTO_PROMPT else "") +
             (if (note.isNotBlank()) " $note" else "") +
-            if (c.instructions.isNotBlank()) " " + c.instructions else ""
+            (if (c.provider == Provider.CHATGPT_PLAN)
+                " Visor requested the ChatGPT model identifier: ${c.model.ifBlank { DEFAULT_CHATGPT_MODEL }}. " +
+                    "If asked which model is in use, report that configured identifier, not a guessed internal model."
+            else "") +
+            (if (c.instructions.isNotBlank()) " " + c.instructions else "")
         val recent = past.takeLast(MAX_EXCHANGES)
         val tokens = if (audience == Audience.PHONE) PHONE_TOKENS else GLASSES_TOKENS
-        val text = when (c.provider) {
-            Provider.CLAUDE -> claude(c, c.model.ifBlank { DEFAULT_CLAUDE_MODEL }, system, recent, question, image, tokens, c.webSearch, turn)
-            Provider.OPENAI_COMPATIBLE -> openAi(c, c.model, system, recent, question, image, tokens, turn)
-        }.replace(VISOR_NOTE, "").trim()
+        val result = when (c.provider) {
+            Provider.CLAUDE -> ChatGptCompletion(claude(c, c.model.ifBlank { DEFAULT_CLAUDE_MODEL }, system, recent, question, image, tokens, c.webSearch, turn))
+            Provider.OPENAI_COMPATIBLE -> ChatGptCompletion(openAi(c, c.model, system, recent, question, image, tokens, turn))
+            Provider.CHATGPT_PLAN -> chatGptResponse(c.model, system, recent, question, image, turn, c.webSearch)
+        }
+        val text = result.text.replace(VISOR_NOTE, "").trim()
         check(text.isNotEmpty()) { "the model gave an empty answer" }
-        Reply(text, turn.remembered, turn.actions, turn.ends)
+        Reply(text, turn.remembered, turn.actions, turn.ends, result.sources)
     }
 
     /** One sentence for the wearer, in [locale]'s language, written from [what]; outside the conversation. */
     suspend fun phrase(what: String, locale: Locale): String = withContext(Dispatchers.IO) {
         val c = config()
-        check(c.apiKey.isNotBlank() || c.provider == Provider.OPENAI_COMPATIBLE) { "no API key is set" }
+        check(c.apiKey.isNotBlank() || c.provider != Provider.CLAUDE) { "no API key is set" }
         val system = "You write one short sentence that smart glasses speak to their wearer, in " +
             "${locale.getDisplayLanguage(Locale.ENGLISH)}. Answer with that sentence only."
         write(c, c.model, system, what, 200)
@@ -132,7 +144,7 @@ class Brain(
     /** A day's lines for the diary, in [locale]'s language, from [exchanges] in order; with the lines' own model if one is set. */
     suspend fun dayLines(exchanges: String, locale: Locale): String = withContext(Dispatchers.IO) {
         val c = config()
-        check(c.apiKey.isNotBlank() || c.provider == Provider.OPENAI_COMPATIBLE) { "no API key is set" }
+        check(c.apiKey.isNotBlank() || c.provider != Provider.CLAUDE) { "no API key is set" }
         val system = "You keep the diary of a person who wears smart glasses with a voice assistant. From the day's " +
             "exchanges with the assistant, write the day's entry: one to three short sentences in " +
             "${locale.getDisplayLanguage(Locale.ENGLISH)}, in the second person (\"You asked about...\"), dry and precise, " +
@@ -144,6 +156,7 @@ class Brain(
     private suspend fun write(c: AssistantConfig, model: String, system: String, text: String, tokens: Int): String = when (c.provider) {
         Provider.CLAUDE -> claude(c, model.ifBlank { DEFAULT_CLAUDE_MODEL }, system, emptyList(), text, null, tokens, false, null)
         Provider.OPENAI_COMPATIBLE -> openAi(c, model, system, emptyList(), text, null, tokens, null)
+        Provider.CHATGPT_PLAN -> chatGptResponse(model, system, emptyList(), text, null, null, false).text
     }.trim().also { check(it.isNotEmpty()) { "the model gave an empty answer" } }
 
     /** What the model knows of the wearer, and how to keep it. Empty when there is nowhere to keep it. */
@@ -311,6 +324,127 @@ class Brain(
         return said
     }
 
+
+    /** ChatGPT plan usage requires streamed, non-stored Responses requests, not Chat Completions.
+     * Tool calling is executed locally: hosted MCP is not available for this auth method.
+     */
+    private suspend fun chatGptResponse(
+        model: String, system: String, past: List<Exchange>, question: String, image: ByteArray?, turn: Turn?,
+        webSearch: Boolean,
+    ): ChatGptCompletion {
+        val token = chatGpt?.accessToken() ?: error("Sign in with ChatGPT in Assistant settings")
+        var input = JSONArray()
+        for (e in past) {
+            input.put(JSONObject().put("role", "user").put("content", e.question))
+            input.put(JSONObject().put("role", "assistant").put("content", e.told()))
+        }
+        val content = if (image == null) question else JSONArray()
+            .put(JSONObject().put("type", "input_text").put("text", question))
+            .put(JSONObject().put("type", "input_image").put("image_url",
+                "data:image/jpeg;base64," + Base64.encodeToString(image, Base64.NO_WRAP)))
+        input.put(JSONObject().put("role", "user").put("content", content))
+        val localTools = JSONArray()
+        fun add(name: String, description: String, schema: JSONObject) {
+            localTools.put(JSONObject().put("type", "function").put("name", name).put("description", description)
+                .put("parameters", JSONObject(schema.toString()).apply { remove("\$schema") })
+                .put("strict", false))
+        }
+        if (turn != null) {
+            if (book != null) {
+                add("remember", REMEMBER_HELP, schema("fact", FACT_HELP))
+                add("forget", FORGET_HELP, schema("id", "The fact's id."))
+            }
+            if (turn.canEnd) add(END_TOOL, END_HELP, NO_INPUT)
+            phoneTools?.tools?.forEach { (name, help, schema) -> add(name, help, schema) }
+            turn.box.tools.forEach { add(it.name, it.help(), it.tool.schema) }
+        }
+        var said = ""
+        val citations = LinkedHashMap<String, WebSource>()
+        var textOnlyRecovery = false
+        var hadToolCalls = false
+        val originalInput = JSONArray(input.toString())
+        var lastShape = "no response"
+        repeat(MAX_TOOL_ROUNDS) {
+            val selectedModel = model.ifBlank { DEFAULT_CHATGPT_MODEL }
+            val request = JSONObject().put("model", selectedModel)
+                .put("instructions", system + if (textOnlyRecovery)
+                    " Give a direct, plain-text response to the user's last question. Do not invoke tools." else "")
+                .put("input", input).put("store", false).put("stream", true)
+            // Recovery must not execute hosted or local tools a second time.
+            if (!textOnlyRecovery) {
+                val tools = ChatGptWire.tools(localTools, webSearch)
+                if (tools.length() > 0) request.put("tools", tools)
+            }
+            // This model supports low reasoning effort, which favors short voice responses.
+            if (textOnlyRecovery && selectedModel == DEFAULT_CHATGPT_MODEL) {
+                request.put("reasoning", JSONObject().put("effort", "low"))
+            }
+            val response = streamChatGpt(token, request)
+            lastShape = ChatGptWire.shape(response)
+            for (source in ChatGptWire.webSources(response)) citations.putIfAbsent(source.url, source)
+            val spoken = ChatGptWire.assistantText(response)
+            if (spoken.isNotBlank()) said = spoken
+            val output = response.optJSONArray("output") ?: error("ChatGPT did not return output")
+            var called = false
+            val pendingResults = JSONArray()
+            for (i in 0 until output.length()) {
+                val item = output.getJSONObject(i)
+                // Preserve assistant, reasoning, and tool call output items for stateless continuation.
+                input.put(item)
+                if (item.optString("type") == "function_call") {
+                    check(!textOnlyRecovery) { "ChatGPT returned an unexpected function call during text-only recovery" }
+                    if (turn == null) continue
+                    called = true
+                    hadToolCalls = true
+                    val args = runCatching { JSONObject(item.optString("arguments")) }.getOrDefault(JSONObject())
+                    val result = runTool(item.getString("name").removePrefix("visor."), args, turn)
+                    pendingResults.put(JSONObject().put("type", "function_call_output")
+                        .put("call_id", item.getString("call_id")).put("output", result.text))
+                }
+            }
+            if (!called) {
+                if (said.isNotBlank()) return ChatGptCompletion(said, citations.values.toList())
+                if (!textOnlyRecovery) {
+                    // Some completed Responses contain reasoning but no speech-ready message.
+                    // One tool-free retry avoids a vague "empty answer" without re-running actions.
+                    textOnlyRecovery = true
+                    if (!hadToolCalls) input = JSONArray(originalInput.toString())
+                    return@repeat
+                }
+                error("ChatGPT completed without answer text after a text-only retry ($lastShape)")
+            }
+            for (i in 0 until pendingResults.length()) input.put(pendingResults.getJSONObject(i))
+        }
+        error("ChatGPT exhausted tool rounds without a final answer ($lastShape)")
+    }
+
+    private suspend fun streamChatGpt(token: String, request: JSONObject): JSONObject =
+        suspendCancellableCoroutine { continuation ->
+            val http = URL("https://api.openai.com/v1/responses").openConnection() as HttpURLConnection
+            continuation.invokeOnCancellation { thread { http.disconnect() } }
+            try {
+                http.requestMethod = "POST"
+                http.connectTimeout = 5000
+                http.readTimeout = 55_000
+                http.doOutput = true
+                http.setRequestProperty("Authorization", "Bearer $token")
+                http.setRequestProperty("Content-Type", "application/json")
+                http.setRequestProperty("Accept", "text/event-stream")
+                http.outputStream.use { it.write(request.toString().toByteArray()) }
+                val status = http.responseCode
+                if (status !in 200..299) {
+                    val detail = http.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                    error("ChatGPT answered HTTP $status: " + detail.take(300))
+                }
+                val completed = http.inputStream.bufferedReader().useLines(ChatGptWire::completed)
+                continuation.resume(completed)
+            } catch (error: Exception) {
+                if (continuation.isActive) continuation.resumeWithException(error)
+            } finally {
+                http.disconnect()
+            }
+        }
+
     /**
      * A reasoning model otherwise spends the whole answer thinking (LM Studio, llama.cpp), or refuses tools on this API
      * (OpenAI's GPT-6), so reasoning_effort goes out as none; a model without reasoning refuses the field. OpenAI's newer
@@ -398,6 +532,7 @@ class Brain(
         const val THINKING_TOKENS = 4_000
         const val PHONE_TOKENS = 900
         const val DEFAULT_CLAUDE_MODEL = "claude-sonnet-5-5"
+        const val DEFAULT_CHATGPT_MODEL = "gpt-6.1-sol"
         const val SYSTEM_PROMPT =
             "You are the voice assistant in a pair of Meta smart glasses, run by the wearer's own app, Visor. " +
                 "Everything you write is spoken aloud through the glasses' speakers, so answer in one to three short, " +

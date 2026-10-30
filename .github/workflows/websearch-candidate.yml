@@ -1,0 +1,100 @@
+# One-off signed test build for ChatGPT hosted web search, not a public release.
+# Triggered only when this workflow is first committed to the feature branch.
+name: ChatGPT web-search toggle fix candidate
+
+on:
+  push:
+    branches: [feature/chatgpt-plan-signin]
+    paths:
+      - ".github/workflows/websearch-candidate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chatgpt-websearch-candidate
+  cancel-in-progress: false
+
+jobs:
+  signed-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          packages: platform-tools platforms;android-37.0 build-tools;37.0.0
+          log-accepted-android-sdk-licenses: false
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: true
+
+      - name: Validate six secrets and restore the signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.VISOR_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.VISOR_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.VISOR_KEY_ALIAS }}
+          META_HW_TOKEN: ${{ secrets.VISOR_META_HW_TOKEN }}
+          META_AR_TOKEN: ${{ secrets.VISOR_META_AR_TOKEN }}
+          META_FRL_TOKEN: ${{ secrets.VISOR_META_FRL_TOKEN }}
+        run: |
+          set -euo pipefail
+          for secret in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS META_HW_TOKEN META_AR_TOKEN META_FRL_TOKEN; do
+            if [ -z "${!secret}" ]; then
+              echo "error: required release secret missing: $secret" >&2
+              exit 1
+            fi
+          done
+          for name in HW AR FRL; do
+            token_var="META_${name}_TOKEN"
+            case "${!token_var}" in
+              "$name|"*) ;;
+              *) echo "error: $token_var has an incorrect prefix" >&2; exit 1 ;;
+            esac
+          done
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/visor-release.p12"
+          keytool -list -storetype PKCS12 \
+            -keystore "$RUNNER_TEMP/visor-release.p12" \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -alias "$KEY_ALIAS" >/dev/null
+
+      - name: Run assistant protocol unit tests
+        run: ./gradlew :core:assistant:testDebugUnitTest
+
+      - name: Assemble signed ChatGPT release candidate
+        env:
+          VISOR_KEYSTORE: ${{ runner.temp }}/visor-release.p12
+          VISOR_KEYSTORE_PASSWORD: ${{ secrets.VISOR_KEYSTORE_PASSWORD }}
+          VISOR_KEY_ALIAS: ${{ secrets.VISOR_KEY_ALIAS }}
+          VISOR_META_HW_TOKEN: ${{ secrets.VISOR_META_HW_TOKEN }}
+          VISOR_META_AR_TOKEN: ${{ secrets.VISOR_META_AR_TOKEN }}
+          VISOR_META_FRL_TOKEN: ${{ secrets.VISOR_META_FRL_TOKEN }}
+          VISOR_VERSION_NAME: 1.4.9-chatgpt.3
+          VISOR_VERSION_CODE: "10411"
+        run: ./gradlew :app:assembleRelease
+
+      - name: Verify signed APK and generate checksum
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/release/app-release.apk
+          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --print-certs "$apk" | grep 'certificate SHA-256'
+          mkdir -p dist
+          cp "$apk" dist/visor-1.4.9-chatgpt.3.apk
+          (cd dist && sha256sum visor-1.4.9-chatgpt.3.apk > visor-1.4.9-chatgpt.3.apk.sha256)
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: visor-chatgpt-signed-candidate-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove signing key from runner
+        if: always()
+        run: rm -f "$RUNNER_TEMP/visor-release.p12"
