@@ -326,7 +326,7 @@ class Brain(
         model: String, system: String, past: List<Exchange>, question: String, image: ByteArray?, turn: Turn?,
     ): String {
         val token = chatGpt?.accessToken() ?: error("Sign in with ChatGPT in Assistant settings")
-        val input = JSONArray()
+        var input = JSONArray()
         for (e in past) {
             input.put(JSONObject().put("role", "user").put("content", e.question))
             input.put(JSONObject().put("role", "assistant").put("content", e.told()))
@@ -397,7 +397,7 @@ class Brain(
                     // One tool-free retry avoids a vague "empty answer" without re-running actions.
                     textOnlyRecovery = true
                     if (!hadToolCalls) input = JSONArray(originalInput.toString())
-                    continue
+                    return@repeat
                 }
                 error("ChatGPT completed without answer text after a text-only retry ($lastShape)")
             }
