@@ -20,7 +20,7 @@ internal object ChatGptWire {
 
     /** Only completed assistant output_text pieces are spoken; never expose reasoning items. */
     fun assistantText(response: JSONObject): String {
-        val output = response.optJSONArray("output") ?: return ""
+        val output = response.optJSONArray("output") ?: return response.optString("_visor_stream_text")
         val pieces = ArrayList<String>()
         for (i in 0 until output.length()) {
             val item = output.optJSONObject(i) ?: continue
@@ -34,7 +34,7 @@ internal object ChatGptWire {
                 }
             }
         }
-        return pieces.joinToString("\n").trim()
+        return pieces.joinToString("\n").trim().ifEmpty { response.optString("_visor_stream_text") }
     }
 
     /** Structural diagnostics only: never log questions, response text, tool arguments or credentials. */
@@ -58,12 +58,14 @@ internal object ChatGptWire {
 
     fun completed(lines: Sequence<String>): JSONObject {
         var completed: JSONObject? = null
+        val streamedText = StringBuilder()
         for (line in lines) {
             if (!line.startsWith("data: ")) continue
             val data = line.removePrefix("data: ").trim()
             if (data == "[DONE]") break
             val event = runCatching { JSONObject(data) }.getOrNull() ?: continue
             when (event.optString("type")) {
+                "response.output_text.delta" -> streamedText.append(event.optString("delta"))
                 "response.completed" -> completed = event.getJSONObject("response")
                 "response.failed" -> {
                     val error = event.optJSONObject("response")?.optJSONObject("error")
@@ -86,6 +88,11 @@ internal object ChatGptWire {
                 }
             }
         }
-        return completed ?: error("ChatGPT response stream ended without response.completed")
+        val response = completed ?: error("ChatGPT response stream ended without response.completed")
+        // In unusual streams, text deltas may be available even if the final payload omits its text.
+        if (assistantText(response).isBlank() && streamedText.isNotBlank()) {
+            response.put("_visor_stream_text", streamedText.toString())
+        }
+        return response
     }
 }
