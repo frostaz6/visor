@@ -1,6 +1,6 @@
 # One-off signed test build for ChatGPT hosted web search, not a public release.
 # Triggered only when this workflow is first committed to the feature branch.
-name: ChatGPT web-search candidate
+name: ChatGPT web-search toggle fix candidate
 
 on:
   push:
@@ -75,8 +75,8 @@ jobs:
           VISOR_META_HW_TOKEN: ${{ secrets.VISOR_META_HW_TOKEN }}
           VISOR_META_AR_TOKEN: ${{ secrets.VISOR_META_AR_TOKEN }}
           VISOR_META_FRL_TOKEN: ${{ secrets.VISOR_META_FRL_TOKEN }}
-          VISOR_VERSION_NAME: 1.4.9-chatgpt.2
-          VISOR_VERSION_CODE: "10410"
+          VISOR_VERSION_NAME: 1.4.9-chatgpt.3
+          VISOR_VERSION_CODE: "10411"
         run: ./gradlew :app:assembleRelease
 
       - name: Verify signed APK and generate checksum
@@ -85,8 +85,8 @@ jobs:
           apk=app/build/outputs/apk/release/app-release.apk
           "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --print-certs "$apk" | grep 'certificate SHA-256'
           mkdir -p dist
-          cp "$apk" dist/visor-1.4.9-chatgpt.2.apk
-          (cd dist && sha256sum visor-1.4.9-chatgpt.2.apk > visor-1.4.9-chatgpt.2.apk.sha256)
+          cp "$apk" dist/visor-1.4.9-chatgpt.3.apk
+          (cd dist && sha256sum visor-1.4.9-chatgpt.3.apk > visor-1.4.9-chatgpt.3.apk.sha256)
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
