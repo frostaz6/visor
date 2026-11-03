@@ -434,7 +434,9 @@ class Brain(
                 val status = http.responseCode
                 if (status !in 200..299) {
                     val detail = http.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
-                    error("ChatGPT answered HTTP $status: " + detail.take(300))
+                    val requestId = http.getHeaderField("x-request-id")
+                        ?: http.getHeaderField("openai-request-id")
+                    error(ChatGptWire.httpFailure(status, detail, requestId, request))
                 }
                 val completed = http.inputStream.bufferedReader().useLines(ChatGptWire::completed)
                 continuation.resume(completed)
