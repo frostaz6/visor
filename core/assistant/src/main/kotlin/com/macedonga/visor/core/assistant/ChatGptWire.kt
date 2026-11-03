@@ -28,7 +28,7 @@ internal object ChatGptWire {
      * Privacy-safe diagnostic for subscription sharing failures.
      * Never include the raw request, bearer token, response body, or user prompts.
      */
-    fun httpFailure(status: Int, body: String, requestId: String?, request: JSONObject): String {
+    fun httpFailure(status: Int, body: String, requestId: String?, request: JSONObject, clientRequestId: String = ""): String {
         val serverError = runCatching { JSONObject(body).optJSONObject("error") }.getOrNull()
         val code = serverError?.optString("code").orEmpty()
             .replace(Regex("[^A-Za-z0-9_\\-]"), "").take(100).ifBlank { "not_returned" }
@@ -45,12 +45,13 @@ internal object ChatGptWire {
             append("\nCode: ").append(code)
             append("\nMessage: ").append(detail)
             append("\nRequest ID: ").append(safeId)
+            append("\nClient request ID: ").append(clientRequestId.take(128).ifBlank { "not_provided" })
             append("\nModel: ").append(request.optString("model", "not_selected").take(80))
             append("\nStream: ").append(request.optBoolean("stream"))
             append("; Store: ").append(request.optBoolean("store", false))
             append("\nWeb search: ").append(if (hasWebSearch) "on" else "off")
             append("; Tool groups: ").append(tools?.length() ?: 0)
-            append("\nShare the request ID with OpenAI Support (never your tokens).")
+            append("\nShare the request IDs with OpenAI Support (never your tokens).")
         }
     }
 
