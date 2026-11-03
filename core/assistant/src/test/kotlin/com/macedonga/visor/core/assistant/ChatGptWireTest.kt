@@ -135,6 +135,36 @@ class ChatGptWireTest {
         assertTrue(!ChatGptWire.shape(response).contains("private"))
     }
 
+    @Test fun httpFailureShowsRequestIdWithoutSecretsOrPrompt() {
+        val request = JSONObject()
+            .put("model", "gpt-5.6-sol")
+            .put("stream", true)
+            .put("store", false)
+            .put("input", JSONArray().put(JSONObject().put("content", "PRIVATE PROMPT")))
+            .put("tools", JSONArray().put(JSONObject().put("type", "web_search")))
+        val body = JSONObject().put("error", JSONObject()
+            .put("code", "subscription_sharing_user_not_eligible")
+            .put("message", "The ChatGPT user is not eligible for subscription sharing.")
+            .put("internal", "PRIVATE TOKEN")).toString()
+        val info = ChatGptWire.httpFailure(403, body, "req_test123", request)
+        assertTrue(info.contains("ChatGPT HTTP 403"))
+        assertTrue(info.contains("subscription_sharing_user_not_eligible"))
+        assertTrue(info.contains("req_test123"))
+        assertTrue(info.contains("gpt-5.6-sol"))
+        assertTrue(info.contains("Web search: on"))
+        assertTrue(!info.contains("PRIVATE PROMPT"))
+        assertTrue(!info.contains("PRIVATE TOKEN"))
+    }
+
+    @Test fun httpFailureHandlesMissingHeadersOrMalformedBodies() {
+        val request = JSONObject().put("model", "gpt-5.6-sol")
+        val info = ChatGptWire.httpFailure(403, "unexpected PRIVATE RESPONSE", null, request)
+        assertTrue(info.contains("Request ID: not_returned"))
+        assertTrue(info.contains("Code: not_returned"))
+        assertTrue(info.contains("Web search: off"))
+        assertTrue(!info.contains("PRIVATE RESPONSE"))
+    }
+
     private fun expectFailure(expected: String, action: () -> Unit) {
         val error = runCatching(action).exceptionOrNull()
         assertTrue("Expected failure containing $expected, got $error", error is IllegalStateException)
