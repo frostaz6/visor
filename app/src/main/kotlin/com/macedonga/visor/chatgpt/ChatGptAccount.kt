@@ -226,9 +226,9 @@ class ChatGptAccount @Inject constructor(@ApplicationContext private val context
             val serverRequestId = (http.getHeaderField("x-request-id")
                 ?: http.getHeaderField("openai-request-id"))
                 ?.take(128).orEmpty().ifBlank { "not_returned" }
-            val summary = "Minimal no-tools test\\nHTTP $status\\nModel: ${model.take(80)}" +
-                "\\nServer request ID: $serverRequestId\\nClient request ID: $clientRequestId" +
-                "\\nWeb search: off; Tool groups: 0"
+            val summary = "Minimal no-tools test\nHTTP $status\nModel: ${model.take(80)}" +
+                "\nServer request ID: $serverRequestId\nClient request ID: $clientRequestId" +
+                "\nWeb search: off; Tool groups: 0"
             if (status !in 200..299) {
                 val raw = http.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
                 val err = runCatching { JSONObject(raw).optJSONObject("error") }.getOrNull()
@@ -236,7 +236,7 @@ class ChatGptAccount @Inject constructor(@ApplicationContext private val context
                 val message = err?.optString("message").orEmpty()
                     .replace(Regex("[\\r\\n]+"), " ").take(220)
                     .ifBlank { "No explanation returned" }
-                return@withContext "$summary\\nCode: $code\\nMessage: $message"
+                return@withContext "$summary\nCode: $code\nMessage: $message"
             }
             var completed = false
             var failureCode = ""
@@ -255,8 +255,8 @@ class ChatGptAccount @Inject constructor(@ApplicationContext private val context
                     }
                 }
             }
-            if (completed) "$summary\\nResult: response.completed (success)"
-            else "$summary\\nResult: incomplete or failed stream; code: ${failureCode.take(100).ifBlank { "not_returned" }}"
+            if (completed) "$summary\nResult: response.completed (success)"
+            else "$summary\nResult: incomplete or failed stream; code: ${failureCode.take(100).ifBlank { "not_returned" }}"
         } finally {
             http.disconnect()
         }
