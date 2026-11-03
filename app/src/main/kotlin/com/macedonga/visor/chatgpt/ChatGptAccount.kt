@@ -198,6 +198,70 @@ class ChatGptAccount @Inject constructor(@ApplicationContext private val context
         }
     }
 
+    /**
+     * One explicit, minimal plan-use probe matching OpenAI's published Responses example.
+     * Never logs or returns bearer credentials, prompts, or streamed response text.
+     */
+    suspend fun testDirectInference(model: String): String = withContext(Dispatchers.IO) {
+        val clientRequestId = "visor-" + UUID.randomUUID().toString()
+        val token = accessToken()
+        val request = JSONObject()
+            .put("model", model)
+            .put("input", org.json.JSONArray().put(JSONObject()
+                .put("role", "user").put("content", "Say exactly: Hello, world!")))
+            .put("store", false)
+            .put("stream", true)
+        val http = URL(RESOURCE + "/responses").openConnection() as HttpURLConnection
+        try {
+            http.requestMethod = "POST"
+            http.doOutput = true
+            http.connectTimeout = 5_000
+            http.readTimeout = 30_000
+            http.setRequestProperty("Authorization", "Bearer $token")
+            http.setRequestProperty("X-Client-Request-Id", clientRequestId)
+            http.setRequestProperty("Content-Type", "application/json")
+            http.setRequestProperty("Accept", "text/event-stream")
+            http.outputStream.use { it.write(request.toString().toByteArray(StandardCharsets.UTF_8)) }
+            val status = http.responseCode
+            val serverRequestId = (http.getHeaderField("x-request-id")
+                ?: http.getHeaderField("openai-request-id"))
+                ?.take(128).orEmpty().ifBlank { "not_returned" }
+            val summary = "Minimal no-tools test\\nHTTP $status\\nModel: ${model.take(80)}" +
+                "\\nServer request ID: $serverRequestId\\nClient request ID: $clientRequestId" +
+                "\\nWeb search: off; Tool groups: 0"
+            if (status !in 200..299) {
+                val raw = http.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                val err = runCatching { JSONObject(raw).optJSONObject("error") }.getOrNull()
+                val code = err?.optString("code").orEmpty().take(100).ifBlank { "not_returned" }
+                val message = err?.optString("message").orEmpty()
+                    .replace(Regex("[\\r\\n]+"), " ").take(220)
+                    .ifBlank { "No explanation returned" }
+                return@withContext "$summary\\nCode: $code\\nMessage: $message"
+            }
+            var completed = false
+            var failureCode = ""
+            http.inputStream.bufferedReader().useLines { lines ->
+                lines.forEach { line ->
+                    if (!line.startsWith("data: ")) return@forEach
+                    val data = line.removePrefix("data: ").trim()
+                    if (data == "[DONE]") return@forEach
+                    val event = runCatching { JSONObject(data) }.getOrNull() ?: return@forEach
+                    when (event.optString("type")) {
+                        "response.completed" -> completed = true
+                        "response.failed" -> failureCode = event.optJSONObject("response")
+                            ?.optJSONObject("error")?.optString("code").orEmpty()
+                        "error" -> failureCode = event.optJSONObject("error")
+                            ?.optString("code").orEmpty()
+                    }
+                }
+            }
+            if (completed) "$summary\\nResult: response.completed (success)"
+            else "$summary\\nResult: incomplete or failed stream; code: ${failureCode.take(100).ifBlank { "not_returned" }}"
+        } finally {
+            http.disconnect()
+        }
+    }
+
     private fun verifyIdentity(jwt: String, clientId: String, nonce: String): JSONObject {
         val parts = jwt.split(".")
         check(parts.size == 3) { "Invalid identity token" }
