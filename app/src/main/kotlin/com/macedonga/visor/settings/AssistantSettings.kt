@@ -127,6 +127,8 @@ fun AssistantSettingsScreen(open: (NavKey) -> Unit, model: AssistantViewModel = 
     var sheet by remember { mutableStateOf<String?>(null) }
     var trial by remember { mutableStateOf("") }
     var trying by remember { mutableStateOf(false) }
+    var directTest by remember { mutableStateOf("") }
+    var directTesting by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val claude = config.provider == Provider.CLAUDE
     val known = model.settings.specs.keys
@@ -212,6 +214,26 @@ fun AssistantSettingsScreen(open: (NavKey) -> Unit, model: AssistantViewModel = 
                             busy = trying,
                         )
                     },
+                    if (config.provider == Provider.CHATGPT_PLAN) row {
+                        RowFrame(
+                            "Test ChatGPT plan access (no tools)",
+                            onClick = if (account.signedIn && account.sharing && !directTesting) ({
+                                directTest = ""
+                                directTesting = true
+                                scope.launch {
+                                    try {
+                                        directTest = runCatching {
+                                            model.chatGpt.testDirectInference(config.model.ifBlank { "gpt-6.1-sol" })
+                                        }.getOrElse { "Minimal no-tools test failed: " + (it.message ?: "Unknown error") }
+                                    } finally {
+                                        directTesting = false
+                                    }
+                                }
+                            }) else null,
+                            sub = directTest.ifEmpty { "One request matching OpenAI's published example; no web, MCP, local functions, memory, or camera" },
+                            busy = directTesting,
+                        )
+                    } else null,
                 )
             }
         }
