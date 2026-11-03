@@ -71,6 +71,7 @@ data class TurnRecord(
     val remembered: List<String> = emptyList(),
     // What it did with the person's tools.
     val actions: List<ToolAction> = emptyList(),
+    val sources: List<WebSource> = emptyList(),
 )
 
 /**
@@ -840,11 +841,11 @@ class Assistant(
         if (interaction in l.closed) {
             waiting.cancel()
             say("The glasses closed this turn before the answer was ready (${modelMs / 1000} s); not sending it")
-            update(interaction) { it.copy(answer = text, problem = ANSWER_TOO_LATE, modelMs = modelMs, remembered = reply.remembered, actions = reply.actions) }
+            update(interaction) { it.copy(answer = text, problem = ANSWER_TOO_LATE, modelMs = modelMs, remembered = reply.remembered, actions = reply.actions, sources = reply.sources) }
             if (link === l) _phase.value = AssistantPhase.LISTENING
             return
         }
-        update(interaction) { it.copy(answer = text, problem = problem, modelMs = modelMs, remembered = reply.remembered, actions = reply.actions) }
+        update(interaction) { it.copy(answer = text, problem = problem, modelMs = modelMs, remembered = reply.remembered, actions = reply.actions, sources = reply.sources) }
         if (reply.ends) say("The model ended the conversation: the glasses stop listening after this answer")
         // Every tool did what was asked and that is the answer, such as music that now plays: the turn ends without a word (#48).
         val quiet = store.config.value.quietAfterActions && problem.isEmpty() && !l.sessionTurn &&
@@ -898,7 +899,7 @@ class Assistant(
             Reply(fallback(spoken(l), store.config.value.apiKey.isBlank() && store.config.value.provider == Provider.CLAUDE))
         }
         val text = reply.text
-        update(sub) { it.copy(answer = text, problem = problem, modelMs = System.currentTimeMillis() - started, remembered = reply.remembered, actions = reply.actions) }
+        update(sub) { it.copy(answer = text, problem = problem, modelMs = System.currentTimeMillis() - started, remembered = reply.remembered, actions = reply.actions, sources = reply.sources) }
         try {
             deliver(l, sub, question, text, live = true)
         } catch (error: Exception) {
@@ -1120,7 +1121,7 @@ class Assistant(
     /** [id]'s question again, with the model and settings as they are now; the new answer replaces the old one. */
     fun askAgain(id: String) {
         if (diary.turn(id) == null) return
-        diary.update(id) { it.copy(answer = "", problem = "", remembered = emptyList(), actions = emptyList(), modelMs = 0) }
+        diary.update(id) { it.copy(answer = "", problem = "", remembered = emptyList(), actions = emptyList(), sources = emptyList(), modelMs = 0) }
         scope.launch { answerHere(id) }
     }
 
@@ -1142,7 +1143,7 @@ class Assistant(
                     if (turn.source == TurnSource.LIVE_AI) liveAiNote() else "", if (phone) Audience.PHONE else Audience.GLASSES,
                 )
             }
-            diary.update(id) { it.copy(answer = reply.text, problem = "", remembered = reply.remembered, actions = reply.actions, modelMs = System.currentTimeMillis() - started) }
+            diary.update(id) { it.copy(answer = reply.text, problem = "", remembered = reply.remembered, actions = reply.actions, sources = reply.sources, modelMs = System.currentTimeMillis() - started) }
         } catch (error: Exception) {
             val why = if (error is kotlinx.coroutines.TimeoutCancellationException) "no answer in ${PHONE_BUDGET_MS / 1000} s" else error.message ?: error::class.simpleName.orEmpty()
             say("The model did not answer in the app: $why")

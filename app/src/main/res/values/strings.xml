@@ -294,6 +294,12 @@
     <string name="meta_ai_set_up">Set up the model</string>
     <string name="meta_ai_copy">Copy</string>
     <string name="meta_ai_share">Share</string>
+    <string name="meta_ai_web_sources">Web sources</string>
+    <string name="meta_ai_export_conversation">Export conversation</string>
+    <string name="meta_ai_export_title">Continue in ChatGPT</string>
+    <string name="meta_ai_export_note">Copy the full conversation, then paste it into a new ChatGPT chat, or share it using another app. Photos are not included. The conversation will only appear in your ChatGPT history if you send it there.</string>
+    <string name="meta_ai_export_copy">Copy conversation for ChatGPT</string>
+    <string name="meta_ai_export_share">Share conversation…</string>
     <string name="meta_ai_again">Ask again</string>
     <string name="meta_ai_continue">Continue this conversation</string>
     <string name="meta_ai_delete">Delete</string>
@@ -400,6 +406,7 @@
     <string name="sum_changed">%1$d changed</string>
     <string name="sum_ai_off">Off: the glasses\' own assistant</string>
     <string name="sum_ai_unset">Not set up</string>
+    <string name="sum_ai_chatgpt_plan">ChatGPT plan</string>
     <string name="sum_ai_glasses_voice">glasses\' voice</string>
     <string name="sum_notify_off">Off</string>
     <string name="sum_notify_all">From every app</string>
@@ -499,7 +506,7 @@
     <string name="ai_vision">Use the camera</string>
     <string name="ai_vision_sub">For questions about what you are looking at.</string>
     <string name="ai_web">Search the web</string>
-    <string name="ai_web_sub">Claude looks things up when it needs to. Slower.</string>
+    <string name="ai_web_sub">Let the assistant search the live web for current information when needed. Searches may take longer.</string>
     <string name="ai_quiet_actions">Quiet after actions</string>
     <string name="ai_quiet_actions_sub">No spoken answer when every action worked.</string>
     <string name="ai_memory_window">A conversation stays open</string>

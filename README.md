@@ -167,3 +167,14 @@ A tag like `v1.2.3` builds the signed release APK in CI and publishes it as a Gi
 Visor is free software under the [GNU Affero General Public License v3.0](LICENSE).
 
 Meta, Ray-Ban, Oakley, Ray-Ban Meta and Oakley Meta are trademarks of their owners. Visor uses the names only to say which glasses it works with.
+
+
+## ChatGPT plan sign-in (experimental fork)
+
+Choose **ChatGPT plan** under Assistant → Provider, then **Continue with ChatGPT**. Authorization happens in your device browser using OpenAI's official open-source OAuth/PKCE flow. You do not enter your ChatGPT password in Visor and no API key is used. Plan usage is subject to OpenAI's preview eligibility and sharing limits.
+
+The phone's browser must reach the temporary `127.0.0.1` callback; keep Visor running while granting access. Credentials are encrypted using an Android Keystore AES-GCM key and refreshed when needed. **Sign out** on the same settings row to delete locally stored credentials. Your existing Claude and OpenAI-compatible API-key providers remain separate and unchanged.
+
+This provider calls `POST /v1/responses` with `store=false`, `stream=true`, and parses a terminal `response.completed` event, as required for subscription-based requests. It keeps Visor's own local MCP tools; hosted MCP attachments are not used with ChatGPT-plan authentication. Only enable tools you would trust to invoke by voice.
+
+**Status:** This is an experimental implementation, not verified on an actual device or account. The GitHub Actions / Android compile and real OAuth callback still require verification before installing. In particular, check that your browser can reach the local callback and that the signed-in account exposes supported models. This does not sync ChatGPT conversation history or ChatGPT memories.

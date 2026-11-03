@@ -2,6 +2,7 @@ package com.macedonga.visor.metaai
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.macedonga.visor.chatgpt.ChatGptAccount
 import com.macedonga.visor.core.assistant.Assistant
 import com.macedonga.visor.core.assistant.AssistantConfigStore
 import com.macedonga.visor.core.assistant.DayLines
@@ -40,6 +41,7 @@ class MetaAiModel @Inject constructor(
     val assistant: Assistant,
     val connection: GlassesConnection,
     val store: AssistantConfigStore,
+    val chatGpt: ChatGptAccount,
 ) : ViewModel() {
 
     private val diary = assistant.diary

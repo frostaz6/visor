@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
@@ -142,6 +143,7 @@ internal fun ConversationBlock(
     onLongPress: (TurnRecord) -> Unit,
     onPhoto: (String) -> Unit,
     onMemories: () -> Unit,
+    onExport: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(vertical = 18.dp)) {
         conversation.startedOn?.let {
@@ -156,6 +158,22 @@ internal fun ConversationBlock(
             if (i > 0) Spacer(Modifier.height(24.dp))
             Exchange(turn, speech.shownOf(turn), { onLongPress(turn) }, onPhoto, onMemories)
         }
+        Row(
+            Modifier.padding(start = SIDE, end = SIDE, top = 18.dp)
+                .clip(RoundedCornerShape(24.dp))
+                .background(Visor.colors.raised)
+                .clickable(onClick = onExport)
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(VisorIcons.Share, null, Modifier.size(16.dp), tint = Visor.colors.textSecondary)
+            Text(
+                stringResource(R.string.meta_ai_export_conversation),
+                style = Visor.type.label,
+                color = Visor.colors.textSecondary,
+                modifier = Modifier.padding(start = 9.dp),
+            )
+        }
     }
 }
 
@@ -168,6 +186,7 @@ internal fun Exchange(turn: TurnRecord, shown: Int, onLongPress: () -> Unit, onP
     val colors = Visor.colors
     val photo = turn.image.takeIf { it.isNotEmpty() }
     val image by rememberDiaryPhoto(photo)
+    val uriHandler = LocalUriHandler.current
     Box(Modifier.fillMaxWidth()) {
         // Past the exchange's edges, and out to nothing before its own: a light cut off at a bound blurs into a line.
         if (photo != null) PhotoLight(image, Modifier.matchParentSize().overhang(LIGHT_OVERHANG), level = 0.48f, radius = 0.5f)
@@ -196,6 +215,32 @@ internal fun Exchange(turn: TurnRecord, shown: Int, onLongPress: () -> Unit, onP
                 Spacer(Modifier.height(8.dp))
             }
             Answer(turn, shown)
+            if (turn.sources.isNotEmpty()) {
+                Text(
+                    stringResource(R.string.meta_ai_web_sources),
+                    style = Visor.type.label,
+                    color = colors.textSecondary,
+                    modifier = Modifier.padding(top = 14.dp, bottom = 2.dp),
+                )
+                for (source in turn.sources) {
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                            .clickable { runCatching { uriHandler.openUri(source.url) } }
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(VisorIcons.Share, null, Modifier.size(15.dp), tint = colors.textSecondary)
+                        Text(
+                            source.title.ifBlank { source.url },
+                            style = Visor.type.label,
+                            color = colors.textPrimary,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
+                    }
+                }
+            }
             for (fact in turn.remembered) {
                 Row(
                     Modifier.padding(top = 10.dp).clip(RoundedCornerShape(8.dp)).clickable(onClick = onMemories).padding(vertical = 2.dp),
@@ -266,7 +311,7 @@ internal fun Thinking(modifier: Modifier = Modifier) {
 
 /** A Live AI session, folded into one card: how long, a strip of what the camera saw, what was asked. */
 @Composable
-internal fun LiveBlock(conversation: DiaryConversation, onOpen: () -> Unit) {
+internal fun LiveBlock(conversation: DiaryConversation, onOpen: () -> Unit, onExport: () -> Unit) {
     val colors = Visor.colors
     val turns = conversation.turns
     val first = turns.first()
@@ -310,6 +355,21 @@ internal fun LiveBlock(conversation: DiaryConversation, onOpen: () -> Unit) {
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = 12.dp),
         )
+        Row(
+            Modifier.padding(top = 16.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .clickable(onClick = onExport)
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(VisorIcons.Share, null, Modifier.size(16.dp), tint = colors.textSecondary)
+            Text(
+                stringResource(R.string.meta_ai_export_conversation),
+                style = Visor.type.label,
+                color = colors.textSecondary,
+                modifier = Modifier.padding(start = 9.dp),
+            )
+        }
     }
 }
 

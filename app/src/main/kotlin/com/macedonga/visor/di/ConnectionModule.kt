@@ -16,6 +16,7 @@ import com.macedonga.visor.core.assistant.SVC_GLASSES_PHOTO
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import com.macedonga.visor.core.assistant.AssistantConfigStore
+import com.macedonga.visor.chatgpt.ChatGptAccount
 import com.macedonga.visor.core.assistant.Brain
 import com.macedonga.visor.core.assistant.Diary
 import com.macedonga.visor.core.assistant.SVC_ASSISTANT
@@ -192,8 +193,9 @@ object ConnectionModule {
         hearing: Hearing,
         glassesConfig: GlassesConfig,
         phone: PhoneActions,
+        chatGpt: ChatGptAccount,
     ): Assistant = Assistant(
-        context, connection, Voice(context), Brain({ config.config.value }, diary, hub, config, phone), config, airship, diary,
+        context, connection, Voice(context), Brain({ config.config.value }, diary, hub, config, phone, chatGpt), config, airship, diary,
         live.wifiSession, live::frameNow,
         object : LiveAiCamera {
             // A Live view already running is the camera; only a stream Live AI opened is Live AI's to close.

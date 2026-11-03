@@ -1,0 +1,84 @@
+# One-time publication of the already-tested signed release APK.
+# Publishing the existing artifact avoids accidentally rebuilding a different binary.
+name: Publish first Visor ChatGPT release
+
+on:
+  push:
+    branches: [feature/chatgpt-plan-signin]
+    paths:
+      - ".github/workflows/publish-first-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: visor-first-chatgpt-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: v1.4.9-chatgpt.1
+      SOURCE_SHA: dfa0ecd0deb3d6abaec61671e510974816031fad
+      SOURCE_RUN: "40980366903"
+      SOURCE_ARTIFACT: visor-chatgpt-signed-candidate-dfa0ecd0deb3d6abaec61671e510974816031fad
+    steps:
+      - name: Confirm source, signed build and release status
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" --jq '.conclusion')" = "success"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" --jq '.head_sha')" = "$SOURCE_SHA"
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; will not overwrite."
+            echo "exists=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Retrieve and verify the exact tested signed APK
+        if: env.exists != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" --name "$SOURCE_ARTIFACT" --dir dist
+          cd dist
+          sha256sum -c visor-1.4.9-chatgpt.1.apk.sha256
+          test -s visor-1.4.9-chatgpt.1.apk
+
+      - name: Publish GitHub release with APK and checksum
+        if: env.exists != 'true'
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<'EOF'
+          ## Visor ChatGPT Edition — first fork release
+
+          This is an **unofficial community fork** of [Visor](https://github.com/macedonga/visor), not an official Meta or OpenAI app.
+
+          ### Features
+          - Sign in with ChatGPT and select a supported model without a separate API key.
+          - Ask questions with “Hey Meta” on supported Meta glasses; Visor answers through its assistant.
+          - Configure local MCP integrations in Visor.
+          - Export a complete conversation (copy or Android Share) to bring into a new ChatGPT chat manually.
+          - Improved ChatGPT response-stream handling, including text-only recovery for empty answers.
+
+          ### Install
+          Download `visor-1.4.9-chatgpt.1.apk` below and verify it against `visor-1.4.9-chatgpt.1.apk.sha256`.
+          Install over an existing copy **only if it was signed by the same fork release key**. Official upstream Visor has a different signature and cannot be updated in place by this APK.
+
+          ### Important
+          - This version was built from commit `dfa0ecd0deb3d6abaec61671e510974816031fad` by successful signed workflow [#40980366903](https://github.com/frostaz6/visor/actions/runs/40980366903).
+          - This APK uses Meta app credentials built into the client. As with any distributed APK, these application-level credentials are extractable. Do not confuse them with the user's personal Meta or ChatGPT account tokens.
+          - ChatGPT conversations and memories remain local to Visor unless you explicitly export a transcript and send it in a new ChatGPT conversation. ChatGPT plugins do not automatically transfer to Visor; MCP servers are configured separately.
+          - The ChatGPT integration is experimental; API behavior and compatibility can change.
+          - Source code is available at the tagged commit. The upstream project's AGPL-3.0 license applies.
+          EOF
+          gh release create "$RELEASE_TAG" \
+            dist/visor-1.4.9-chatgpt.1.apk \
+            dist/visor-1.4.9-chatgpt.1.apk.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$SOURCE_SHA" \
+            --title "Visor ChatGPT Edition v1.4.9-chatgpt.1" \
+            --notes-file release-notes.md

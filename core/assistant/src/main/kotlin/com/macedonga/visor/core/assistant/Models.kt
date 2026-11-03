@@ -34,6 +34,7 @@ suspend fun listModels(config: AssistantConfig): List<ModelInfo> = withContext(D
             } while (after != null)
             all
         }
+        Provider.CHATGPT_PLAN -> emptyList()
         Provider.OPENAI_COMPATIBLE -> {
             val headers = if (config.apiKey.isBlank()) emptyMap() else mapOf("Authorization" to "Bearer ${config.apiKey}")
             val page = get(config.baseUrl.trimEnd('/') + "/models", headers)

@@ -1,13 +1,12 @@
-# Builds the signed release APK for a version tag (v1.2.3) and publishes it as a GitHub release.
-# Run it by hand to get a draft release of the current main instead.
+# Candidate builds are manual-only on this fork until Meta pairing and ChatGPT sign-in are verified.
+# A draft release is created from the selected branch. Creating the release tag must
+# NOT trigger a second CI run that could publish an untested APK.
 #
 # Secrets: VISOR_KEYSTORE_BASE64 (the PKCS12 keystore, base64), VISOR_KEYSTORE_PASSWORD, VISOR_KEY_ALIAS,
 # and Meta's app tokens VISOR_META_HW_TOKEN, VISOR_META_AR_TOKEN and VISOR_META_FRL_TOKEN (README, Build from source).
 name: Release
 
 on:
-  push:
-    tags: ["v*.*.*"]
   workflow_dispatch:
     inputs:
       version:
@@ -70,17 +69,32 @@ jobs:
       - name: Check the secrets and restore the release key
         env:
           KEYSTORE_BASE64: ${{ secrets.VISOR_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.VISOR_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.VISOR_KEY_ALIAS }}
           META_HW_TOKEN: ${{ secrets.VISOR_META_HW_TOKEN }}
           META_AR_TOKEN: ${{ secrets.VISOR_META_AR_TOKEN }}
           META_FRL_TOKEN: ${{ secrets.VISOR_META_FRL_TOKEN }}
         run: |
-          for secret in KEYSTORE_BASE64 META_HW_TOKEN META_AR_TOKEN META_FRL_TOKEN; do
+          set -euo pipefail
+          for secret in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS META_HW_TOKEN META_AR_TOKEN META_FRL_TOKEN; do
             if [ -z "${!secret}" ]; then
-              echo "error: the VISOR_$secret secret is not set" >&2
+              echo "error: required secret is missing: $secret" >&2
               exit 1
             fi
           done
-          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/visor-release.p12"
+          for name in HW AR FRL; do
+            token_var="META_${name}_TOKEN"
+            case "${!token_var}" in
+              "$name|"*) ;;
+              *) echo "error: $token_var does not have the required prefix" >&2; exit 1 ;;
+            esac
+          done
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/visor-release.p12"
+          keytool -list -storetype PKCS12             -keystore "$RUNNER_TEMP/visor-release.p12"             -storepass "$KEYSTORE_PASSWORD"             -alias "$KEY_ALIAS" >/dev/null
+
+      - name: Run assistant protocol unit tests
+        run: ./gradlew :core:assistant:testDebugUnitTest
 
       - name: Build the release APK
         env:
