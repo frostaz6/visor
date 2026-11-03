@@ -421,6 +421,7 @@ class Brain(
     private suspend fun streamChatGpt(token: String, request: JSONObject): JSONObject =
         suspendCancellableCoroutine { continuation ->
             val http = URL("https://api.openai.com/v1/responses").openConnection() as HttpURLConnection
+            val clientRequestId = "visor-" + java.util.UUID.randomUUID().toString()
             continuation.invokeOnCancellation { thread { http.disconnect() } }
             try {
                 http.requestMethod = "POST"
@@ -428,6 +429,7 @@ class Brain(
                 http.readTimeout = 55_000
                 http.doOutput = true
                 http.setRequestProperty("Authorization", "Bearer $token")
+                http.setRequestProperty("X-Client-Request-Id", clientRequestId)
                 http.setRequestProperty("Content-Type", "application/json")
                 http.setRequestProperty("Accept", "text/event-stream")
                 http.outputStream.use { it.write(request.toString().toByteArray()) }
@@ -436,7 +438,7 @@ class Brain(
                     val detail = http.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
                     val requestId = http.getHeaderField("x-request-id")
                         ?: http.getHeaderField("openai-request-id")
-                    error(ChatGptWire.httpFailure(status, detail, requestId, request))
+                    error(ChatGptWire.httpFailure(status, detail, requestId, request, clientRequestId))
                 }
                 val completed = http.inputStream.bufferedReader().useLines(ChatGptWire::completed)
                 continuation.resume(completed)
