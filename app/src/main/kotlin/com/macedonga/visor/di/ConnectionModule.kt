@@ -259,6 +259,7 @@ object ConnectionModule {
         hearing: Hearing,
         glassesConfig: GlassesConfig,
         phone: PhoneActions,
+        shutter: Shutter,
         chatGpt: ChatGptAccount,
     ): Assistant = Assistant(
         context, connection, Voice(context), Brain({ config.config.value }, diary, hub, config, phone, chatGpt), config, airship, diary,
