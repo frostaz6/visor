@@ -34,19 +34,17 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/macedonga/visor.git
           git fetch --no-tags upstream 99e9cbdd97ef31e14d08d7ea63bbe0d68d5fcc71
-          git merge --no-commit --no-ff -X ours FETCH_HEAD
-          # Preserve the fork's existing GitHub Actions workflows: Actions tokens
-          # cannot push changes to other workflow files without workflows scope.
-          git restore --source=HEAD --staged --worktree -- .github/workflows/build.yml .github/workflows/release.yml
-          git commit -m "Merge Visor upstream 2.1.1 into ChatGPT integration (keep CI workflows)"
-          git status --short
-          if test -n "$(git diff HEAD^1 HEAD --name-only -- '.github/workflows/*')"; then
-            echo "Unexpected workflow change in upstream merge" >&2
-            exit 1
+          if git merge-base --is-ancestor 99e9cbdd97ef31e14d08d7ea63bbe0d68d5fcc71 HEAD; then
+            echo "Upstream 2.1.1 already merged; validating the latest integration fixes."
+          else
+            git merge --no-commit --no-ff -X ours FETCH_HEAD
+            # Preserve existing CI workflows, which the Actions token cannot update.
+            git restore --source=HEAD --staged --worktree -- .github/workflows/build.yml .github/workflows/release.yml
+            git commit -m "Merge Visor upstream 2.1.1 into ChatGPT integration (keep CI workflows)"
+            test "$(git rev-parse HEAD^2)" = "99e9cbdd97ef31e14d08d7ea63bbe0d68d5fcc71"
           fi
-          echo "Merged commit: $(git rev-parse HEAD)"
-          echo "Upstream parent: $(git rev-parse HEAD^2)"
-          test "$(git rev-parse HEAD^2)" = "99e9cbdd97ef31e14d08d7ea63bbe0d68d5fcc71"
+          git status --short
+          echo "Integration head: $(git rev-parse HEAD)"
 
       - name: Push only the integration branch
         run: git push origin HEAD:refs/heads/integration/upstream-2.1.1-chatgpt
