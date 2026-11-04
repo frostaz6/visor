@@ -242,20 +242,23 @@ fun AssistantSettingsScreen(open: (NavKey) -> Unit, model: AssistantViewModel = 
                 SectionLabel(stringResource(R.string.ai_section_answers))
                 Rows(
                     {
-                        PillsRow(
+                        if (partner) ValueRow(
+                            stringResource(R.string.ai_voice), stringResource(R.string.ai_voice_phone), onClick = null,
+                            sub = stringResource(R.string.language_partner_voice), dim = true,
+                        ) else PillsRow(
                             stringResource(R.string.ai_voice),
                             listOf(true to stringResource(R.string.ai_voice_glasses), false to stringResource(R.string.ai_voice_phone)),
                             config.glassesVoice,
                             onPick = { on -> model.store.update { it.copy(glassesVoice = on) } },
                         )
                     },
-                    {
+                    if (!partner) row {
                         ValueRow(
                             stringResource(R.string.ai_speech_language),
                             config.speechLanguage.takeIf { it.isNotEmpty() }?.let(::languageName) ?: stringResource(R.string.ai_speech_language_glasses),
                             onClick = { sheet = "speech" },
                         )
-                    },
+                    } else null,
                     { VisorToggleRow(model.toggles.byId("vision")!!, sub = stringResource(R.string.ai_vision_sub)) },
                     if (config.provider.supportsWebSearch()) row {
                         VisorToggleRow(model.toggles.byId("web")!!, sub = stringResource(R.string.ai_web_sub))

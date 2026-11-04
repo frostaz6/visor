@@ -60,6 +60,7 @@ private const val MT_REQUEST_BUG_REPORT_RESPONSE = 2
  */
 class MediaImport(
     private val context: Context,
+    private val albums: Albums,
     private val connection: GlassesConnection,
     private val receiver: AirshipReceiver,
     private val store: IdentityStore,
@@ -97,6 +98,9 @@ class MediaImport(
     // Asked for while another import ran: they go next. Guarded by this, with running and inFlight's additions.
     private val queued = LinkedHashSet<String>()
 
+    // Captures that are not media, logged once each.
+    private val noticed = java.util.Collections.synchronizedSet(HashSet<String>())
+
     // The import running, and when it last said or received anything.
     @Volatile
     private var running: Job? = null
@@ -128,7 +132,7 @@ class MediaImport(
     val imported: SharedFlow<String> = _imported.asSharedFlow()
 
     private val assembly = Assembly(
-        context, index, places, ::say,
+        context, albums, index, places, ::say,
         onSaved = { handle ->
             _saved.update { it + 1 }
             _imported.tryEmit(handle)
@@ -499,6 +503,9 @@ class MediaImport(
     private fun onMedia(data: ServiceData) {
         when (data.messageType) {
             MT_CAPTURE -> parseCapture(data.payload)?.let { capture ->
+                if (!capture.isMedia && noticed.add(capture.handle)) {
+                    say("Skipped a capture of kind ${capture.kindCode}: no photo or video in it, assets ${capture.assets.map { it.kind }}")
+                }
                 _captures.update { list ->
                     (list.filter { it.handle != capture.handle } + capture).sortedByDescending { it.timestampNs }
                 }
@@ -666,10 +673,11 @@ class MediaImport(
     private fun save(file: File, ext: String, capture: Capture?): String {
         val video = ext == "mp4"
         val taken = capture?.takenAtMillis ?: System.currentTimeMillis()
+        val album = albums.path(video)
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, "Visor_" + NAME.format(Instant.ofEpochMilli(taken)) + "." + ext)
             put(MediaStore.MediaColumns.MIME_TYPE, MIME.getValue(ext))
-            put(MediaStore.MediaColumns.RELATIVE_PATH, if (video) "Movies/Visor" else "Pictures/Visor")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, album)
             put(MediaStore.MediaColumns.DATE_TAKEN, taken)
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
@@ -682,7 +690,7 @@ class MediaImport(
         val uri = resolver.insert(collection, values) ?: error("the gallery would not take it")
         try {
             checkNotNull(resolver.openOutputStream(uri)).use { out -> file.inputStream().use { it.copyTo(out) } }
-            return publish(resolver, uri)
+            return publish(resolver, uri).also { albums.follow(uri, album, video) }
         } catch (error: Exception) {
             resolver.delete(uri, null, null)
             throw error

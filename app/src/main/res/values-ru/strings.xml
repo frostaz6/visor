@@ -276,6 +276,8 @@
     <string name="language_switching">Переключение голоса</string>
     <string name="language_done">%1$s установлен на очках.</string>
     <string name="language_failed">%1$s не установлен: %2$s</string>
+    <string name="language_partner_done">Выбран язык: %1$s.</string>
+    <string name="language_partner_failed">Не удалось выбрать %1$s: %2$s</string>
     <string name="language_cancel">Отмена</string>
     <string name="language_ok">OK</string>
     <string name="language_confirm_title">Скачать %1$s?</string>
@@ -284,7 +286,14 @@
     <string name="language_need_glasses">Подключите очки, чтобы сменить язык.</string>
     <string name="language_offers_problem">Не удалось запросить у Meta языковые пакеты: %1$s</string>
     <string name="language_footnote">Пакеты скачиваются из Meta через ваш аккаунт. В каждом есть распознавание речи и голоса языка.</string>
+    <string name="language_partner">Языки телефона</string>
+    <string name="language_checking_phone">Проверка телефона</string>
+    <string name="language_recognition_unknown">Телефон не подтвердил, что распознаёт этот язык.</string>
+    <string name="language_partner_voice">Языки телефона используют голос телефона.</string>
+    <string name="language_partner_speed">Настраивается в синтезе речи Android.</string>
     <string name="meta_ai_title">Meta AI</string>
+    <string name="language_photos_title">Включить съёмку голосом?</string>
+    <string name="language_photos_text">Снимки голосом на языках телефона. Другие приложения не получают камеру.</string>
     <string name="meta_ai_ask">Спросите о чём угодно</string>
     <string name="meta_ai_send">Отправить</string>
     <string name="meta_ai_hold">Удерживайте, чтобы говорить</string>
@@ -374,6 +383,9 @@
     <string name="settings_flags_sub">Переключатели Meta для функций, которые она не включила</string>
     <string name="settings_developer">Режим разработчика</string>
     <string name="settings_developer_sub">Интенты камеры и события съёмки для других приложений</string>
+    <string name="settings_developer_token">Токен</string>
+    <string name="settings_developer_token_new">Новый токен</string>
+    <string name="settings_developer_token_required">Действия только с токеном</string>
     <string name="settings_diagnostics_sub">Связь, ключ и то, что сообщают очки</string>
     <string name="settings_event_log_sub">Всё, что делала связь, новые внизу</string>
     <string name="tiles_hint">Удерживайте настройку, чтобы закрепить её здесь</string>
@@ -510,6 +522,8 @@
     <string name="ai_glasses_voice_sub">Если выключено, ответы озвучивает голос телефона.</string>
     <string name="ai_vision">Использовать камеру</string>
     <string name="ai_vision_sub">Для вопросов о том, на что вы смотрите.</string>
+    <string name="ai_voice_photos">Фото голосом</string>
+    <string name="ai_voice_photos_sub">Снимки голосом на языке телефона.</string>
     <string name="ai_web">Искать в интернете</string>
     <string name="ai_web_sub">Claude ищет информацию, когда это нужно. Медленнее.</string>
     <string name="ai_quiet_actions">Тишина после действий</string>
@@ -559,6 +573,13 @@
     <string name="access_mic_why">Чтобы распознавать уточняющие вопросы и Live AI средствами телефона. Собственный микрофон телефона слушает, только пока вы удерживаете микрофон в Meta AI.</string>
     <string name="access_contacts">Контакты</string>
     <string name="access_contacts_why">Чтобы очки могли сказать, от кого сообщение.</string>
+    <string name="texts_photo">Фото</string>
+    <string name="texts_video">Видео</string>
+    <string name="texts_attachment">Вложение</string>
+    <string name="access_sms">SMS</string>
+    <string name="access_sms_why">Чтобы очки могли показывать ваши SMS и отправлять их.</string>
+    <string name="access_calls">Журнал звонков</string>
+    <string name="access_calls_why">Чтобы очки могли показывать ваши недавние звонки.</string>
     <string name="access_location">Местоположение</string>
     <string name="access_location_why">Чтобы отмечать, где очки сделали каждое фото.</string>
     <string name="access_location_always">Местоположение всегда</string>

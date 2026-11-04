@@ -57,6 +57,12 @@ class GlassesService : Service() {
     lateinit var contacts: PhoneContacts
 
     @Inject
+    lateinit var sharing: PhoneSharing
+
+    @Inject
+    lateinit var navigation: Navigation
+
+    @Inject
     lateinit var kind: LinkKind
 
     @Inject
@@ -67,6 +73,9 @@ class GlassesService : Service() {
 
     @Inject
     lateinit var importChoice: com.macedonga.visor.gallery.ImportChoice
+
+    @Inject
+    lateinit var albums: com.macedonga.visor.core.media.Albums
 
     @Inject
     lateinit var live: com.macedonga.visor.core.media.LiveStream
@@ -89,6 +98,14 @@ class GlassesService : Service() {
     // Injected so the widget and the Quick Settings tile follow the glasses while no screen is open.
     @Inject
     lateinit var outside: com.macedonga.visor.outside.Outside
+
+    // Injected so a Display's band is linked while the service runs.
+    @Inject
+    lateinit var band: com.macedonga.visor.band.BandLink
+
+    // Injected so captions started from the glasses are kept while no screen is open.
+    @Inject
+    lateinit var captionTranscripts: com.macedonga.visor.display.CaptionTranscripts
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -126,13 +143,16 @@ class GlassesService : Service() {
             started = true
             connection.start(scope, targetFrom(intent))
             contacts.start(scope)
+            sharing.start(scope)
+            navigation.start(scope)
             moveToLe()
             holdLe()
             com.macedonga.visor.gallery.notePlaces(this, scope, connection, media.places)
-            com.macedonga.visor.gallery.importOnItsOwn(this, scope, connection, media, importChoice)
+            com.macedonga.visor.gallery.importOnItsOwn(this, scope, connection, media, importChoice, albums)
             com.macedonga.visor.language.keepAssistantConfig(scope, connection, glassesConfig, media, glassesSettings, assistantConfig, log)
             developer.keep(scope)
             com.macedonga.visor.settings.keepCameraInLine(scope, glassesSettings, assistantConfig, log)
+            com.macedonga.visor.settings.keepMuseWithWakeWord(scope, glassesSettings, log)
             com.macedonga.visor.settings.keepLandscape(scope, connection, glassesSettings, glassesConfig, media, log)
             media.steadiedOnGlasses = com.macedonga.visor.settings.steadiedOnGlasses(glassesSettings)
             notifications = scope.launch {
@@ -155,8 +175,18 @@ class GlassesService : Service() {
             }
         } else if (intent?.action == ACTION_RECONNECT) {
             retry()
+        } else {
+            targetFrom(intent)?.let(::switchTo)
         }
         return START_STICKY
+    }
+
+    /** Another pair asked for: the session with this one ends first, as the glasses hold one each. */
+    private fun switchTo(target: GlassesTarget) {
+        if (target.serial == connection.state.value.target?.serial) return
+        if (live.running.value || media.importing.value) return
+        // Asked twice in a row, the second finds this pair already chosen.
+        scope.launch { connection.restart(scope, target) { it.target?.serial == target.serial } }
     }
 
     /**
@@ -168,8 +198,10 @@ class GlassesService : Service() {
         if (state.link != LinkState.DISCONNECTED && state.link != LinkState.LOST) return
         if (live.running.value || media.importing.value) return
         scope.launch {
-            connection.stop()
-            connection.start(scope, state.target)
+            // Tried again on Bluetooth: a Wi-Fi link that dropped is not one to wait for.
+            connection.restart(scope, state.target?.takeIf { it.link is GlassesLink.Bluetooth }) {
+                it.link != LinkState.DISCONNECTED && it.link != LinkState.LOST
+            }
         }
     }
 
@@ -197,16 +229,15 @@ class GlassesService : Service() {
         scope.launch {
             var last = 0L
             combine(connection.state, kind.overLe, keeper.connected) { state, le, held ->
-                held && !le && state.link == LinkState.READY && state.device?.streamingActive != true
+                // A session moved to Wi-Fi for a lease is not on LE either, and stays where it is.
+                held && !le && state.link == LinkState.READY && state.device?.streamingActive != true && state.target?.link !is GlassesLink.Wifi
             }
                 .distinctUntilChanged()
                 .collect { move ->
                     val now = System.currentTimeMillis()
                     if (!move || now - last < MOVE_EVERY_MS) return@collect
                     last = now
-                    val target = connection.state.value.target
-                    connection.stop()
-                    connection.start(scope, target)
+                    connection.restart(scope, connection.state.value.target)
                 }
         }
     }

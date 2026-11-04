@@ -1,6 +1,9 @@
 package com.macedonga.visor.language
 
+import com.macedonga.visor.core.identity.token.withToken
 import android.content.Context
+import com.macedonga.visor.core.assistant.SpeechModels
+import com.macedonga.visor.core.assistant.Voice
 import com.macedonga.visor.core.connection.GlassesConnection
 import com.macedonga.visor.core.identity.language.LANGUAGE_FEATURE
 import com.macedonga.visor.core.identity.language.PackOffer
@@ -11,35 +14,35 @@ import com.macedonga.visor.core.session.LinkState
 import com.macedonga.visor.core.settings.GlassesSettings
 import com.macedonga.visor.log.EventLog
 import com.macedonga.visor.login.MetaLogin
+import com.macedonga.visor.pairs.pairPrefs
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
-import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
-import java.security.MessageDigest
+import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Where an install is. [done] and [total] are bytes for the download and the transfer. */
 sealed interface LanguageWork {
     data object Idle : LanguageWork
     data class Working(val language: GlassesLanguage, val step: Step, val done: Long = 0, val total: Long = 0) : LanguageWork
-    data class Finished(val language: GlassesLanguage) : LanguageWork
+    data class Finished(val language: GlassesLanguage, val recognitionChecked: Boolean = true) : LanguageWork
     data class Failed(val language: GlassesLanguage, val reason: String) : LanguageWork
 
-    enum class Step { ASKING, DOWNLOADING, SENDING, SWITCHING }
+    enum class Step { CHECKING_PHONE, ASKING, DOWNLOADING, SENDING, SWITCHING }
 }
 
 /**
@@ -58,7 +61,9 @@ class LanguageInstaller @Inject constructor(
     private val log: EventLog,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val prefs = context.getSharedPreferences("languages", Context.MODE_PRIVATE)
+    // Installed on the glasses: each pair has its own.
+    @Volatile
+    private var prefs = pairPrefs(context, "languages", connection.pair.value)
     private val dir = File(context.filesDir, "packs")
 
     private val _work = MutableStateFlow<LanguageWork>(LanguageWork.Idle)
@@ -67,6 +72,15 @@ class LanguageInstaller @Inject constructor(
     /** The languages on the glasses, as far as this phone knows: the built-in one, those installed from here, the one in use. */
     private val _installed = MutableStateFlow(prefs.getStringSet(KEY_INSTALLED, null).orEmpty() + "en_US")
     val installed: StateFlow<Set<String>> = _installed.asStateFlow()
+
+    init {
+        scope.launch {
+            connection.pair.filterNotNull().distinctUntilChanged().drop(1).collect { serial ->
+                prefs = pairPrefs(context, "languages", serial)
+                _installed.value = prefs.getStringSet(KEY_INSTALLED, null).orEmpty() + "en_US"
+            }
+        }
+    }
 
     /** What Meta has, by pack suffix, and why it could not be asked. */
     private val _offers = MutableStateFlow<Map<String, PackOffer>>(emptyMap())
@@ -78,7 +92,7 @@ class LanguageInstaller @Inject constructor(
 
     init {
         // The voice in use says its language is there.
-        scope.launch { settings.state.collect { languageOfVoice(settings.value(VOICE_KEY))?.let { markInstalled(it.locale) } } }
+        scope.launch { settings.state.collect { languageOfVoice(settings.value(VOICE_KEY))?.takeUnless { it.partner }?.let { markInstalled(it.locale) } } }
     }
 
     /** Ask Meta for every language's pack, for the sizes. Quietly does nothing until the glasses have said who they are. */
@@ -105,7 +119,7 @@ class LanguageInstaller @Inject constructor(
                 if (!zip.exists()) {
                     if (dir.usableSpace < offer.size + SPARE_BYTES) error("the phone needs ${mb(offer.size + SPARE_BYTES)} free")
                     log.add("Language: downloading ${offer.resource} ${offer.version}, ${mb(offer.size)}")
-                    download(offer, zip) { done -> _work.value = LanguageWork.Working(language, LanguageWork.Step.DOWNLOADING, done, offer.size) }
+                    downloadPack(offer, zip) { done -> _work.value = LanguageWork.Working(language, LanguageWork.Step.DOWNLOADING, done, offer.size) }
                 }
                 if (connection.state.value.link != LinkState.READY) error("the glasses are not connected")
                 step(language, LanguageWork.Step.SENDING, 0, zip.length())
@@ -120,7 +134,7 @@ class LanguageInstaller @Inject constructor(
                 markInstalled(language.locale)
                 zip.delete()
                 step(language, LanguageWork.Step.SWITCHING)
-                use(language.voices.first { it.id == language.defaultVoice })
+                switchVoice(language.defaultVoice)
                 log.add("Language: ${language.locale} is on the glasses")
                 _work.value = LanguageWork.Finished(language)
             } catch (error: kotlinx.coroutines.CancellationException) {
@@ -141,8 +155,62 @@ class LanguageInstaller @Inject constructor(
         if (job?.isActive != true) _work.value = LanguageWork.Idle
     }
 
-    /** Switch the assistant to [voice], and with it to its language. False when the glasses are not there to hear it. */
-    fun use(voice: GlassesVoice): Boolean = settings.write(VOICE_KEY, voice.id)
+    /** Switch to [voice]; a phone language is checked on the phone first, then confirmed by the glasses. */
+    fun use(voice: GlassesVoice) {
+        if (job?.isActive == true) return
+        val language = languageOfVoice(voice.id) ?: return
+        // A voice on the glasses: its row shows the switch and a refusal, as the glasses report them.
+        if (!language.partner) {
+            settings.write(VOICE_KEY, voice.id)
+            return
+        }
+        job = scope.launch {
+            try {
+                check(connection.state.value.link == LinkState.READY) { "the glasses are not connected" }
+                val locale = Locale.forLanguageTag(language.locale.replace('_', '-'))
+                step(language, LanguageWork.Step.CHECKING_PHONE)
+                val recognitionChecked = checkPhone(voice.id)
+                step(language, LanguageWork.Step.SWITCHING)
+                switchVoice(voice.id)
+                SpeechModels.prepare(context, locale) { log.add("Language: $it") }
+                _work.value = LanguageWork.Finished(language, recognitionChecked)
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                _work.value = LanguageWork.Idle
+                throw error
+            } catch (error: Exception) {
+                log.add("Language: ${language.locale} failed: ${error.message}")
+                _work.value = LanguageWork.Failed(language, error.message ?: error::class.java.simpleName)
+            }
+        }
+    }
+
+    internal suspend fun checkPhone(voiceId: String): Boolean {
+        if (!voiceId.startsWith("3p_")) return true
+        val language = languageOfVoice(voiceId) ?: error("unknown 3P voice: $voiceId")
+        val locale = Locale.forLanguageTag(language.locale.replace('_', '-'))
+        val recognitionChecked = SpeechModels.check(context, locale)
+        val voice = Voice(context)
+        try {
+            voice.checkLanguage(locale)
+        } finally {
+            voice.close()
+        }
+        return recognitionChecked
+    }
+
+    internal suspend fun switchVoice(voiceId: String) {
+        check(settings.write(VOICE_KEY, voiceId)) { "the voice could not be sent to the glasses" }
+        val defaultVoice = settings.catalogue[VOICE_KEY]?.default
+        val confirmed = withTimeoutOrNull(20_000) {
+            settings.state.first { state ->
+                VOICE_KEY !in state.pending && (state.stored[VOICE_KEY] ?: defaultVoice) == voiceId
+            }
+        }
+        check(confirmed != null) {
+            if (VOICE_KEY in settings.state.value.kept) "the glasses kept their previous voice"
+            else "the glasses did not confirm the voice"
+        }
+    }
 
     private fun step(language: GlassesLanguage, step: LanguageWork.Step, done: Long = 0, total: Long = 0) {
         _work.value = LanguageWork.Working(language, step, done, total)
@@ -154,70 +222,17 @@ class LanguageInstaller @Inject constructor(
         prefs.edit().putStringSet(KEY_INSTALLED, _installed.value - "en_US").apply()
     }
 
-    private fun ask(packs: List<String>): List<PackOffer> {
+    private fun ask(packs: List<String>): List<PackOffer> = offersFor(packs.map { LANGUAGE_FEATURE + it })
+
+    /** What Meta has for these glasses under the constellation [features], named in full. */
+    fun offersFor(features: List<String>): List<PackOffer> {
         val info = connection.state.value.info ?: error("connect the glasses once, so they say which they are")
         // Meta/hammerhead/greathammerhead:14/UKQ1.250303.001/72387580077200100:user/release-keys
         val parts = info.build.split('/')
         val firmware = parts.getOrNull(4)?.substringBefore(':').orEmpty()
         val type = parts.getOrNull(4)?.substringAfter(':', "user").orEmpty()
         if (firmware.isEmpty()) error("the glasses' build is unknown")
-        val token = login.source.get()
-        return fetchPackOffers(token, info.serial, firmware, packs.map { LANGUAGE_FEATURE + it }, "ota.${parts.getOrElse(1) { "hammerhead" }}.$type")
-    }
-
-    /** The zip, resumed where an earlier try stopped, checked against Meta's SHA-256. */
-    private suspend fun download(offer: PackOffer, file: File, onProgress: (Long) -> Unit) = withContext(Dispatchers.IO) {
-        val part = File(file.path + ".part")
-        var have = if (part.exists()) part.length() else 0L
-        val c = URL(offer.url).openConnection() as HttpURLConnection
-        try {
-            c.connectTimeout = 30_000
-            c.readTimeout = 60_000
-            if (have > 0) c.setRequestProperty("Range", "bytes=$have-")
-            when (c.responseCode) {
-                206 -> Unit
-                200 -> have = 0
-                else -> error("the download answered ${c.responseCode}")
-            }
-            FileOutputStream(part, have > 0).use { out ->
-                c.inputStream.use { input ->
-                    val buffer = ByteArray(256 * 1024)
-                    var lastReport = 0L
-                    while (true) {
-                        coroutineContext.ensureActive()
-                        val n = input.read(buffer)
-                        if (n < 0) break
-                        out.write(buffer, 0, n)
-                        have += n
-                        if (have - lastReport > 1_000_000) {
-                            lastReport = have
-                            onProgress(have)
-                        }
-                    }
-                }
-            }
-        } finally {
-            c.disconnect()
-        }
-        onProgress(have)
-        if (offer.sha256.isNotEmpty() && sha256(part) != offer.sha256.lowercase()) {
-            part.delete()
-            error("the download did not match Meta's checksum; try again")
-        }
-        check(part.renameTo(file)) { "could not keep the download" }
-    }
-
-    private fun sha256(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(1024 * 1024)
-            while (true) {
-                val n = input.read(buffer)
-                if (n < 0) break
-                digest.update(buffer, 0, n)
-            }
-        }
-        return digest.digest().joinToString("") { "%02x".format(it) }
+        return login.source.withToken { token -> fetchPackOffers(token, info.serial, firmware, features, "ota.${parts.getOrElse(1) { "hammerhead" }}.$type") }
     }
 
     private companion object {

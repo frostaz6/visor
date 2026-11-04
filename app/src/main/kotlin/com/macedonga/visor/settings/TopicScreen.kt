@@ -30,6 +30,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation3.runtime.NavKey
 import com.macedonga.visor.NotifyAppsKey
 import com.macedonga.visor.R
+import com.macedonga.visor.core.media.Albums
 import com.macedonga.visor.core.design.Visor
 import com.macedonga.visor.core.settings.offeredOn
 import com.macedonga.visor.features.featureSection
@@ -51,7 +52,7 @@ private fun sectionsOf(topic: Topic): List<Pair<Int?, List<String>>> = when (top
     )
     Topic.CONTROLS -> listOf(
         R.string.section_capture_button to listOf(
-            "capture_mode", "assignable_action_button_short_press_mapping", "assignable_action_button_long_press_mapping",
+            "capture_button_short_long_press", "capture_mode", "assignable_action_button_short_press_mapping", "assignable_action_button_long_press_mapping",
             "action_button_assistant_custom_prompt",
         ),
         R.string.section_touchpad to listOf(
@@ -116,6 +117,7 @@ fun TopicScreen(name: String, open: (NavKey) -> Unit, model: SettingsViewModel =
                 )
             }
             Topic.PHOTOS -> item(key = "visor") { PhotosPart(model) }
+            Topic.BAND -> item(key = "visor") { BandPart(model) }
             else -> Unit
         }
         // Hearing is nothing but features, so they need no heading of their own there.
@@ -150,10 +152,27 @@ private fun PhotosPart(model: SettingsViewModel) {
         onPauseOrDispose { }
     }
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { places = placesAllowed(context) }
+    // Which album is being renamed: null for none, then whether it is the videos'.
+    var renaming by remember { mutableStateOf<Boolean?>(null) }
+    val photosAlbum by model.albums.photos.collectAsStateWithLifecycle()
+    val videosAlbum by model.albums.videos.collectAsStateWithLifecycle()
+    val moving by model.albums.moving.collectAsStateWithLifecycle()
+    val together by model.albums.together.collectAsStateWithLifecycle()
     Column {
         SectionLabel(stringResource(R.string.import_title), Modifier.padding(top = 0.dp))
         OptionCards(AutoImport.entries.map { Triple(it, stringResource(it.title), stringResource(it.detail)) }, mode, model.importChoice::set)
         Footnote(stringResource(R.string.import_note))
+        SectionLabel(stringResource(R.string.section_album))
+        Rows(
+            row { ToggleRow(stringResource(R.string.album_together), together, model.albums::setTogether) },
+            row {
+                ValueRow(
+                    stringResource(if (together) R.string.album_both else R.string.album_photos), photosAlbum,
+                    onClick = { renaming = false }, busy = moving > 0,
+                )
+            },
+            if (together) null else row { ValueRow(stringResource(R.string.album_videos), videosAlbum, onClick = { renaming = true }, busy = moving > 0) },
+        )
         SectionLabel(stringResource(R.string.section_places))
         Rows({
             RowFrame(stringResource(R.string.places_title), onClick = null, sub = stringResource(R.string.places_sub)) {
@@ -169,6 +188,14 @@ private fun PhotosPart(model: SettingsViewModel) {
                 }
             }
         })
+        val video = renaming
+        if (video != null) TextSheet(
+            stringResource(if (video) R.string.album_videos else if (together) R.string.album_both else R.string.album_photos),
+            if (video) videosAlbum else photosAlbum,
+            onSave = if (video) model.albums::setVideos else model.albums::setPhotos,
+            onDismiss = { renaming = null },
+            hint = Albums.DEFAULT,
+        )
     }
 }
 
