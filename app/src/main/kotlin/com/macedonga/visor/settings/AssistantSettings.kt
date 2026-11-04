@@ -86,6 +86,8 @@ private sealed interface KeyCheck {
 fun AssistantSettingsScreen(open: (NavKey) -> Unit, model: AssistantViewModel = hiltViewModel()) {
     val context = LocalContext.current
     val config by model.store.config.collectAsStateWithLifecycle()
+    val settingsState by model.settings.state.collectAsStateWithLifecycle()
+    val partner = (settingsState.stored["assistant_voice_id"] ?: model.settings.value("assistant_voice_id"))?.startsWith("3p_") == true
     val account by model.chatGpt.state.collectAsStateWithLifecycle()
     val phase by model.assistant.phase.collectAsStateWithLifecycle()
     var hearing by remember { mutableStateOf(context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) }
