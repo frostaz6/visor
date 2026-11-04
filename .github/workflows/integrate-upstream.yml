@@ -34,8 +34,16 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/macedonga/visor.git
           git fetch --no-tags upstream 99e9cbdd97ef31e14d08d7ea63bbe0d68d5fcc71
-          git merge --no-edit --no-ff -X ours FETCH_HEAD -m "Merge Visor upstream 2.1.1 into ChatGPT integration"
+          git merge --no-commit --no-ff -X ours FETCH_HEAD
+          # Preserve the fork's existing GitHub Actions workflows: Actions tokens
+          # cannot push changes to other workflow files without workflows scope.
+          git restore --source=HEAD --staged --worktree -- .github/workflows/build.yml .github/workflows/release.yml
+          git commit -m "Merge Visor upstream 2.1.1 into ChatGPT integration (keep CI workflows)"
           git status --short
+          if test -n "$(git diff HEAD^1 HEAD --name-only -- '.github/workflows/*')"; then
+            echo "Unexpected workflow change in upstream merge" >&2
+            exit 1
+          fi
           echo "Merged commit: $(git rev-parse HEAD)"
           echo "Upstream parent: $(git rev-parse HEAD^2)"
           test "$(git rev-parse HEAD^2)" = "99e9cbdd97ef31e14d08d7ea63bbe0d68d5fcc71"
