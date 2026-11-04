@@ -1,0 +1,115 @@
+name: Stage upstream Visor 2.1.1 with ChatGPT sign-in
+
+on:
+  push:
+    branches:
+      - integration/upstream-2.1.1-chatgpt
+    paths:
+      - .github/workflows/integrate-upstream.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: integration-upstream-2.1.1-chatgpt
+  cancel-in-progress: false
+
+jobs:
+  merge-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - name: Check out the ChatGPT integration branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: integration/upstream-2.1.1-chatgpt
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Merge official Visor upstream preserving conflicting custom hunks
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "visor-integration-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/macedonga/visor.git
+          git fetch --no-tags upstream 99e9cbdd97ef31e14d08d7ea63bbe0d68d5fcc71
+          git merge --no-edit --no-ff -X ours FETCH_HEAD -m "Merge Visor upstream 2.1.1 into ChatGPT integration"
+          git status --short
+          echo "Merged commit: $(git rev-parse HEAD)"
+          echo "Upstream parent: $(git rev-parse HEAD^2)"
+          test "$(git rev-parse HEAD^2)" = "99e9cbdd97ef31e14d08d7ea63bbe0d68d5fcc71"
+
+      - name: Push only the integration branch
+        run: git push origin HEAD:refs/heads/integration/upstream-2.1.1-chatgpt
+
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          packages: platform-tools platforms;android-37.0 build-tools;37.0.0
+          log-accepted-android-sdk-licenses: false
+
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: true
+
+      - name: Check signing secrets and restore original signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.VISOR_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.VISOR_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.VISOR_KEY_ALIAS }}
+          META_HW_TOKEN: ${{ secrets.VISOR_META_HW_TOKEN }}
+          META_AR_TOKEN: ${{ secrets.VISOR_META_AR_TOKEN }}
+          META_FRL_TOKEN: ${{ secrets.VISOR_META_FRL_TOKEN }}
+        run: |
+          set -euo pipefail
+          for secret in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS META_HW_TOKEN META_AR_TOKEN META_FRL_TOKEN; do
+            test -n "${!secret}" || { echo "Missing signing or Meta token: $secret"; exit 1; }
+          done
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/visor-release.p12"
+          keytool -list -storetype PKCS12 -keystore "$RUNNER_TEMP/visor-release.p12" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null
+
+      - name: Run ChatGPT assistant tests
+        run: ./gradlew :core:assistant:testDebugUnitTest --stacktrace
+
+      - name: Build signed integrated candidate
+        env:
+          VISOR_KEYSTORE: ${{ runner.temp }}/visor-release.p12
+          VISOR_KEYSTORE_PASSWORD: ${{ secrets.VISOR_KEYSTORE_PASSWORD }}
+          VISOR_KEY_ALIAS: ${{ secrets.VISOR_KEY_ALIAS }}
+          VISOR_META_HW_TOKEN: ${{ secrets.VISOR_META_HW_TOKEN }}
+          VISOR_META_AR_TOKEN: ${{ secrets.VISOR_META_AR_TOKEN }}
+          VISOR_META_FRL_TOKEN: ${{ secrets.VISOR_META_FRL_TOKEN }}
+          VISOR_VERSION_NAME: 2.1.1-chatgpt-merge.1
+          VISOR_VERSION_CODE: "20102"
+        run: ./gradlew :app:assembleRelease --stacktrace
+
+      - name: Check app version and signature
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/release/app-release.apk
+          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --print-certs "$apk" | grep 'certificate SHA-256'
+          badging=$("$ANDROID_HOME/build-tools/37.0.0/aapt" dump badging "$apk" | grep '^package:')
+          echo "$badging"
+          echo "$badging" | grep -F "name='com.macedonga.visor'"
+          echo "$badging" | grep -F "versionCode='20102'"
+          mkdir -p dist
+          cp "$apk" dist/visor-2.1.1-chatgpt-merge.1.apk
+          (cd dist && sha256sum visor-2.1.1-chatgpt-merge.1.apk > visor-2.1.1-chatgpt-merge.1.apk.sha256)
+
+      - name: Upload unsigned-to-public (signed) staging build as private workflow artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: visor-2.1.1-chatgpt-merge-signed-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/visor-release.p12"
