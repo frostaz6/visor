@@ -34,7 +34,8 @@ enum class Provider(val title: String, val api: String, val keys: String, val se
     GROK("Grok", "https://api.x.ai/v1", "https://console.x.ai", WebSearch.RESPONSES),
     OPENROUTER("OpenRouter", "https://openrouter.ai/api/v1", "https://openrouter.ai/settings/keys", WebSearch.OPENROUTER),
     GROQ("Groq", "https://api.groq.com/openai/v1", "https://console.groq.com/keys", WebSearch.GROQ),
-    OPENAI_COMPATIBLE("", "", "", null);
+    // Custom endpoints may support the Responses API web_search tool. If they do not, Brain retries without search.
+    OPENAI_COMPATIBLE("", "", "", WebSearch.RESPONSES);
 
     /** Answers come over Chat Completions (when they do not search). */
     val chat: Boolean get() = this != CLAUDE && this != CHATGPT
