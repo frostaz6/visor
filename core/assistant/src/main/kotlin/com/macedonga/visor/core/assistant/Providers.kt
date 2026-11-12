@@ -55,7 +55,9 @@ enum class Provider(
         billing = "https://openrouter.ai/settings/credits",
     ),
     GROQ("Groq", "https://api.groq.com/openai/v1", "https://console.groq.com/keys", WebSearch.GROQ, billing = "https://console.groq.com/settings/billing"),
-    OPENAI_COMPATIBLE("", "", "", null);
+    // Generic OpenAI-compatible endpoints can expose the Responses API web_search tool.
+    // Unsupported endpoints fall back to regular Chat Completions without search.
+    OPENAI_COMPATIBLE("", "", "", WebSearch.RESPONSES);
 
     /** Answers come over Chat Completions (when they do not search). */
     val chat: Boolean get() = this != CLAUDE && this != CHATGPT
